@@ -1,11 +1,10 @@
 """
-Sidhu Sir's Multi-Channel AI Quiz & Content Bot (Groq Dynamic Model Engine)
-==========================================================================
-Automatically discovers and uses the active model on your Groq account.
-Zero 404 model_not_found errors.
+Sidhu Sir's Ultimate Multi-Channel AI Bot (Strict Accuracy + Vision + PDF + Back Navigation)
+=============================================================================================
 """
 
 from http.server import HTTPServer, BaseHTTPRequestHandler
+import io
 import json
 import logging
 import os
@@ -15,6 +14,7 @@ import time
 import telebot
 from telebot import types
 import requests
+import pypdf
 
 # ------------------------------------------------------------------------------
 # 0. FREE CLOUD KEEP-ALIVE SERVER (For Render Web Service)
@@ -56,7 +56,7 @@ user_sessions = {}
 pending_posts = {}
 
 # ------------------------------------------------------------------------------
-# 2. DYNAMIC GROQ AI ENGINE (Auto-detects active models from your account)
+# 2. DYNAMIC GROQ AI ENGINE WITH STRICT FACTUAL GUARDRAILS
 # ------------------------------------------------------------------------------
 cached_groq_model = None
 
@@ -64,7 +64,6 @@ def get_active_groq_model():
     global cached_groq_model
     if cached_groq_model:
         return cached_groq_model
-    
     headers = {"Authorization": f"Bearer {GROQ_API_KEY.strip()}"}
     try:
         r = requests.get("https://api.groq.com/openai/v1/models", headers=headers, timeout=5)
@@ -79,7 +78,6 @@ def get_active_groq_model():
                 return models[0]
     except Exception:
         pass
-    
     return "llama-3.1-8b-instant"
 
 def ask_groq(prompt: str) -> str:
@@ -87,13 +85,24 @@ def ask_groq(prompt: str) -> str:
     headers = {"Authorization": f"Bearer {GROQ_API_KEY.strip()}", "Content-Type": "application/json"}
     model_name = get_active_groq_model()
     
+    system_rules = (
+        "You are an authoritative, senior exam paper setter for UPSC and MPSC examinations.\n"
+        "STRICT FACTUAL ACCURACY RULES (CRITICAL):\n"
+        "1. Never hallucinate or confuse historical figures, leaders, or events.\n"
+        "2. For Maharashtra & Indian History:\n"
+        "   - Mahad Satyagraha (20 March 1927), Kalaram Temple Satyagraha, Bahishkrit Hitakarini Sabha, Mooknayak, and Manusmriti Dahan are led strictly by Dr. B.R. Ambedkar (NOT Mahatma Gandhi).\n"
+        "   - Satyashodhak Samaj is Mahatma Jyotirao Phule.\n"
+        "   - Shahu Maharaj is associated with reservation in Kolhapur, Satya Shodhak support, and Vedokta.\n"
+        "3. Base every fact strictly on authentic historical and constitutional consensus. Output exact truth only."
+    )
+    
     payload = {
         "model": model_name,
         "messages": [
-            {"role": "system", "content": "You are a senior UPSC & MPSC paper setter. Always output strictly formatted exam material."},
+            {"role": "system", "content": system_rules},
             {"role": "user", "content": prompt}
         ],
-        "temperature": 0.5,
+        "temperature": 0.3,
         "max_tokens": 2048
     }
     resp = requests.post(url, headers=headers, json=payload, timeout=35)
@@ -109,36 +118,113 @@ def parse_json_mcqs(text: str) -> list:
     return data if isinstance(data, list) else [data]
 
 # ------------------------------------------------------------------------------
-# 3. BOT COMMANDS & TOPIC INPUT
+# 3. INPUT HANDLERS: TEXT, PHOTO & PDF
 # ------------------------------------------------------------------------------
 @bot.message_handler(commands=['start', 'help'])
 def start_cmd(msg):
     text = (
         "🚀 *Sidhu Sir's Ultimate Quiz & Content Bot Active!*\n\n"
-        "1. 📊 **Quiz Poll** (४ पर्यायांचे प्रश्न)\n"
-        "2. 💡 **Mnemonic Trick** (लक्षात ठेवण्याच्या शॉर्ट ट्रिक्स)\n"
-        "3. 📌 **Quick Notes** (१ मिनिट रिव्हिजन नोट्स)\n\n"
-        "👉 **वापरण्यासाठी:** कोणताही विषय टाईप करून पाठवा!"
+        "✨ **तुम्ही काय पाठवू शकता?**\n"
+        "1. 📝 **विषयाचे नाव** थेट टाईप करून पाठवा (उदा. `महाड सत्याग्रह` किंवा `Article 32`).\n"
+        "2. 📸 **पुस्तकाचा फोटो** काढून पाठवा (AI पान वाचून थेट प्रश्न काढेल).\n"
+        "3. 📄 **नोट्सची PDF** पाठवा (AI पीडीएफ मधील मुद्द्यांवर प्रश्न बनवेल).\n\n"
+        "👉 **सुरुवात करण्यासाठी:** खाली मेसेज, फोटो किंवा PDF पाठवा!"
     )
     bot.send_message(msg.chat.id, text, parse_mode="Markdown")
 
+# 1. Text Input
 @bot.message_handler(func=lambda m: True, content_types=['text'])
-def handle_topic(msg):
+def handle_text(msg):
     topic = msg.text.strip()
     if not topic or topic.startswith('/'):
         return
-    user_sessions[msg.chat.id] = {"topic": topic}
-    
+    user_sessions[msg.chat.id] = {"topic": topic, "source_type": "text"}
+    show_format_menu(msg.chat.id, topic)
+
+# 2. Book Photo Input (Vision OCR)
+@bot.message_handler(content_types=['photo'])
+def handle_photo(msg):
+    status = bot.reply_to(msg, "📸 *पुस्तकाचा फोटो मिळाला!* पान स्कॅन होत आहे...", parse_mode="Markdown")
+    try:
+        file_info = bot.get_file(msg.photo[-1].file_id)
+        img_bytes = bot.download_file(file_info.file_path)
+        
+        extracted_text = extract_text_from_photo(img_bytes)
+        bot.delete_message(msg.chat.id, status.message_id)
+        
+        user_sessions[msg.chat.id] = {"topic": extracted_text[:1500], "source_type": "photo"}
+        show_format_menu(msg.chat.id, "📖 पुस्तकाचे पान (Photo Scanned)")
+    except Exception as e:
+        bot.edit_message_text(f"❌ फोटो वाचताना त्रुटी: {str(e)}", msg.chat.id, status.message_id)
+
+def extract_text_from_photo(img_bytes: bytes) -> str:
+    import base64
+    b64 = base64.b64encode(img_bytes).decode('utf-8')
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY.strip()}", "Content-Type": "application/json"}
+    payload = {
+        "model": "llama-3.2-11b-vision-preview",
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Transcribe and extract all study notes, key historical facts, and educational content from this book page exactly as written:"},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+            ]
+        }],
+        "temperature": 0.2,
+        "max_tokens": 1500
+    }
+    resp = requests.post(url, headers=headers, json=payload, timeout=40)
+    if resp.status_code == 200:
+        return resp.json()["choices"][0]["message"]["content"]
+    return "Scanned Textbook Page Notes"
+
+# 3. PDF Document Input
+@bot.message_handler(content_types=['document'])
+def handle_doc(msg):
+    fname = msg.document.file_name.lower()
+    if not fname.endswith('.pdf'):
+        bot.reply_to(msg, "कृपया केवळ PDF फाईल किंवा पुस्तकाचा फोटो पाठवा.")
+        return
+
+    status = bot.reply_to(msg, f"📄 *PDF मिळाली:* `{fname}`\nमजकूर वाचत आहे...", parse_mode="Markdown")
+    try:
+        file_info = bot.get_file(msg.document.file_id)
+        pdf_bytes = bot.download_file(file_info.file_path)
+        
+        reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+        extracted = ""
+        for page in reader.pages[:5]:
+            t = page.extract_text()
+            if t:
+                extracted += t + "\n"
+                
+        bot.delete_message(msg.chat.id, status.message_id)
+        if not extracted.strip():
+            bot.send_message(msg.chat.id, "⚠️ या PDF मधून मजकूर काढता आला नाही. कृपया पुस्तकाचा फोटो काढून पाठवा.")
+            return
+
+        user_sessions[msg.chat.id] = {"topic": extracted[:2000], "source_type": "pdf"}
+        show_format_menu(msg.chat.id, f"📄 {fname} (PDF मधील मजकूर)")
+    except Exception as e:
+        bot.edit_message_text(f"❌ PDF वाचताना त्रुटी: {str(e)}", msg.chat.id, status.message_id)
+
+def show_format_menu(cid, topic_label, mid=None):
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
-        types.InlineKeyboardButton("📊 Quiz Poll (प्रश्न)", callback_data="fmt_quiz"),
+        types.InlineKeyboardButton("📊 Quiz Poll (प्रश्न संच)", callback_data="fmt_quiz"),
         types.InlineKeyboardButton("💡 Mnemonic (शॉर्टकट ट्रिक)", callback_data="fmt_mnemonic"),
-        types.InlineKeyboardButton("📌 Quick Notes (रिव्हिजन नोट्स)", callback_data="fmt_notes")
+        types.InlineKeyboardButton("📌 Quick Notes (रिव्हिजन नोट्स)", callback_data="fmt_notes"),
+        types.InlineKeyboardButton("❌ रद्द करा (Cancel)", callback_data="can_")
     )
-    bot.reply_to(msg, f"📝 **विषय:** `{topic}`\n\n👇 **काय तयार करायचे आहे?**", reply_markup=markup, parse_mode="Markdown")
+    text = f"📝 **सामग्री:** `{topic_label[:80]}`\n\n👇 **काय तयार करायचे आहे?**"
+    if mid:
+        bot.edit_message_text(text, cid, mid, reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(cid, text, reply_markup=markup, parse_mode="Markdown")
 
 # ------------------------------------------------------------------------------
-# 4. INTERACTIVE MENUS & GENERATION
+# 4. STEP-BY-STEP FLOW WITH BACK BUTTONS
 # ------------------------------------------------------------------------------
 @bot.callback_query_handler(func=lambda call: True)
 def handle_cb(call):
@@ -148,62 +234,51 @@ def handle_cb(call):
 
     if call.data.startswith("fmt_"):
         sess["fmt"] = call.data.replace("fmt_", "")
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton(CHANNELS["upsc_polity"]["title"], callback_data="ch_upsc_polity"),
-            types.InlineKeyboardButton(CHANNELS["upsc_history"]["title"], callback_data="ch_upsc_history")
-        )
-        markup.add(
-            types.InlineKeyboardButton(CHANNELS["upsc_geo"]["title"], callback_data="ch_upsc_geo"),
-            types.InlineKeyboardButton(CHANNELS["upsc_economy"]["title"], callback_data="ch_upsc_economy")
-        )
-        markup.add(
-            types.InlineKeyboardButton(CHANNELS["upsc_env"]["title"], callback_data="ch_upsc_env"),
-            types.InlineKeyboardButton(CHANNELS["upsc_sci"]["title"], callback_data="ch_upsc_sci")
-        )
-        markup.add(
-            types.InlineKeyboardButton(CHANNELS["mpsc_official"]["title"], callback_data="ch_mpsc_official")
-        )
-        bot.edit_message_text("👇 **कोणत्या चॅनेलवर पोस्ट करायचे आहे?**", cid, mid, reply_markup=markup, parse_mode="Markdown")
+        show_channel_menu(cid, mid)
+
+    elif call.data == "back_to_fmt":
+        show_format_menu(cid, sess.get("topic", "विषय")[:60], mid)
 
     elif call.data.startswith("ch_"):
         sess["ch"] = call.data.replace("ch_", "")
-        if sess["fmt"] == "quiz":
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("👑 UPSC Latest", callback_data="lvl_upsc"),
-                types.InlineKeyboardButton("🏛️ MPSC राज्यसेवा", callback_data="lvl_rajyaseva")
-            )
-            markup.add(
-                types.InlineKeyboardButton("🎯 MPSC Combine", callback_data="lvl_combine"),
-                types.InlineKeyboardButton("👮 पोलीस भरती/सरळसेवा", callback_data="lvl_bharti")
-            )
-            bot.edit_message_text("👇 **परीक्षेचा स्तर (Level) निवडा:**", cid, mid, reply_markup=markup, parse_mode="Markdown")
+        if sess.get("fmt") == "quiz":
+            show_level_menu(cid, mid)
         else:
-            show_lang_options(cid, mid)
+            show_lang_menu(cid, mid)
+
+    elif call.data == "back_to_ch":
+        show_channel_menu(cid, mid)
 
     elif call.data.startswith("lvl_"):
         sess["lvl"] = call.data.replace("lvl_", "")
-        show_lang_options(cid, mid)
+        show_lang_menu(cid, mid)
+
+    elif call.data == "back_to_lvl":
+        if sess.get("fmt") == "quiz":
+            show_level_menu(cid, mid)
+        else:
+            show_channel_menu(cid, mid)
 
     elif call.data.startswith("lng_"):
         sess["lang"] = call.data.replace("lng_", "")
-        if sess["fmt"] == "quiz":
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("⚡ १ प्रश्न", callback_data="cnt_1"),
-                types.InlineKeyboardButton("🔥 ५ प्रश्न", callback_data="cnt_5")
-            )
-            markup.add(
-                types.InlineKeyboardButton("🏆 १० प्रश्न", callback_data="cnt_10"),
-                types.InlineKeyboardButton("🚀 २५ प्रश्न", callback_data="cnt_25")
-            )
-            bot.edit_message_text("👇 **किती प्रश्न तयार करायचे आहेत?**", cid, mid, reply_markup=markup, parse_mode="Markdown")
+        if sess.get("fmt") == "quiz":
+            show_count_menu(cid, mid)
         else:
             run_content_generation(cid, mid, sess)
 
+    elif call.data == "back_to_lang":
+        show_lang_menu(cid, mid)
+
     elif call.data.startswith("cnt_"):
         sess["cnt"] = int(call.data.replace("cnt_", ""))
+        show_timer_menu(cid, mid)
+
+    elif call.data == "back_to_cnt":
+        show_count_menu(cid, mid)
+
+    elif call.data.startswith("tmr_"):
+        t_val = call.data.replace("tmr_", "")
+        sess["timer"] = 45 if t_val == "45" else None
         run_content_generation(cid, mid, sess)
 
     elif call.data.startswith("pub_"):
@@ -218,21 +293,27 @@ def handle_cb(call):
 
         if item["type"] == "quiz":
             quizzes = item["data"]
+            timer_sec = item.get("timer")
             brand = "\n\n🎯 Join: @sidhu_sir_official"
+            
             for i, q in enumerate(quizzes):
                 exp = q["explanation"]
                 if len(exp) + len(brand) <= 200:
                     exp += brand
-                bot.send_poll(
-                    chat_id=target_id,
-                    question=f"[{i+1}/{len(quizzes)}] {q['question']}" if len(quizzes) > 1 else q['question'],
-                    options=q["options"],
-                    type="quiz",
-                    correct_option_id=q["correct_option_id"],
-                    explanation=exp,
-                    is_anonymous=True,
-                    open_period=45
-                )
+                
+                poll_kwargs = {
+                    "chat_id": target_id,
+                    "question": f"[{i+1}/{len(quizzes)}] {q['question']}" if len(quizzes) > 1 else q['question'],
+                    "options": q["options"],
+                    "type": "quiz",
+                    "correct_option_id": q["correct_option_id"],
+                    "explanation": exp,
+                    "is_anonymous": True
+                }
+                if timer_sec:
+                    poll_kwargs["open_period"] = timer_sec
+
+                bot.send_poll(**poll_kwargs)
                 time.sleep(2.5)
         else:
             content = item["data"] + "\n\n━━━━━━━━━━━━━━━\n📢 **अधिक तयारीसाठी जॉईन करा:** @sidhu_sir_official"
@@ -241,17 +322,73 @@ def handle_cb(call):
         bot.send_message(cid, f"🎉 **अभिनंदन!** कन्टेन्ट `{target_id}` चॅनेलवर यशस्वीरीत्या पोस्ट झाला आहे!")
         del pending_posts[post_id]
 
-    elif call.data.startswith("can_"):
+    elif call.data == "can_":
         bot.edit_message_text("❌ रद्द करण्यात आले.", cid, mid)
 
-def show_lang_options(cid, mid):
+def show_channel_menu(cid, mid):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(CHANNELS["upsc_polity"]["title"], callback_data="ch_upsc_polity"),
+        types.InlineKeyboardButton(CHANNELS["upsc_history"]["title"], callback_data="ch_upsc_history")
+    )
+    markup.add(
+        types.InlineKeyboardButton(CHANNELS["upsc_geo"]["title"], callback_data="ch_upsc_geo"),
+        types.InlineKeyboardButton(CHANNELS["upsc_economy"]["title"], callback_data="ch_upsc_economy")
+    )
+    markup.add(
+        types.InlineKeyboardButton(CHANNELS["upsc_env"]["title"], callback_data="ch_upsc_env"),
+        types.InlineKeyboardButton(CHANNELS["upsc_sci"]["title"], callback_data="ch_upsc_sci")
+    )
+    markup.add(
+        types.InlineKeyboardButton(CHANNELS["mpsc_official"]["title"], callback_data="ch_mpsc_official")
+    )
+    markup.add(types.InlineKeyboardButton("🔙 मागे जा (Back)", callback_data="back_to_fmt"))
+    bot.edit_message_text("👇 **कोणत्या चॅनेलवर पोस्ट करायचे आहे?**", cid, mid, reply_markup=markup, parse_mode="Markdown")
+
+def show_level_menu(cid, mid):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("👑 UPSC Latest", callback_data="lvl_upsc"),
+        types.InlineKeyboardButton("🏛️ MPSC राज्यसेवा", callback_data="lvl_rajyaseva")
+    )
+    markup.add(
+        types.InlineKeyboardButton("🎯 MPSC Combine", callback_data="lvl_combine"),
+        types.InlineKeyboardButton("👮 पोलीस भरती/सरळसेवा", callback_data="lvl_bharti")
+    )
+    markup.add(types.InlineKeyboardButton("🔙 मागे जा (Back)", callback_data="back_to_ch"))
+    bot.edit_message_text("👇 **परीक्षेचा स्तर (Level) निवडा:**", cid, mid, reply_markup=markup, parse_mode="Markdown")
+
+def show_lang_menu(cid, mid):
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
         types.InlineKeyboardButton("🌐 Bilingual (मराठी + English)", callback_data="lng_bilingual"),
         types.InlineKeyboardButton("🚩 फक्त शुद्ध मराठी", callback_data="lng_marathi"),
-        types.InlineKeyboardButton("🇬🇧 Only English", callback_data="lng_english")
+        types.InlineKeyboardButton("🇬🇧 Only English", callback_data="lng_english"),
+        types.InlineKeyboardButton("🔙 मागे जा (Back)", callback_data="back_to_lvl")
     )
     bot.edit_message_text("👇 **कोणत्या भाषेत कन्टेन्ट हवा आहे?**", cid, mid, reply_markup=markup, parse_mode="Markdown")
+
+def show_count_menu(cid, mid):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⚡ १ प्रश्न", callback_data="cnt_1"),
+        types.InlineKeyboardButton("🔥 ५ प्रश्न", callback_data="cnt_5")
+    )
+    markup.add(
+        types.InlineKeyboardButton("🏆 १० प्रश्न", callback_data="cnt_10"),
+        types.InlineKeyboardButton("🚀 २५ प्रश्न", callback_data="cnt_25")
+    )
+    markup.add(types.InlineKeyboardButton("🔙 मागे जा (Back)", callback_data="back_to_lang"))
+    bot.edit_message_text("👇 **किती प्रश्न तयार करायचे आहेत?**", cid, mid, reply_markup=markup, parse_mode="Markdown")
+
+def show_timer_menu(cid, mid):
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("♾️ नॉर्मल क्विझ (कायम चालू - कधीही सोडवता येईल)", callback_data="tmr_none"),
+        types.InlineKeyboardButton("⏱️ लाईव्ह टेस्ट (४५ सेकंदांचा उलटा टायमर)", callback_data="tmr_45"),
+        types.InlineKeyboardButton("🔙 मागे जा (Back)", callback_data="back_to_cnt")
+    )
+    bot.edit_message_text("👇 **क्विझ प्रकार (Quiz Mode) निवडा:**", cid, mid, reply_markup=markup, parse_mode="Markdown")
 
 def run_content_generation(cid, mid, sess):
     ch_info = CHANNELS[sess["ch"]]
@@ -267,37 +404,50 @@ def run_content_generation(cid, mid, sess):
         if fmt == "quiz":
             cnt = sess.get("cnt", 1)
             prompt = (
-                f"Subject: {ch_info['sub']}. Exam: {sess.get('lvl', 'UPSC')}. Language: {lang_str}.\n"
-                f"Create {cnt} MCQs on: '{topic}'.\n"
-                f"RULES: Question max 280 chars, 4 options under 90 chars each, correct index 0-3, explanation max 140 chars.\n"
-                f"Return ONLY JSON array:\n"
+                f"Subject: {ch_info['sub']}. Exam Level: {sess.get('lvl', 'MPSC')}. Language: {lang_str}.\n"
+                f"Source Topic / Material:\n'{topic}'\n\n"
+                f"RULES (STRICT):\n"
+                f"1. Generate exactly {cnt} MCQs strictly based on authentic historical/constitutional facts.\n"
+                f"2. Ensure zero confusion between historical figures (e.g. Mahad Satyagraha is strictly Dr. B.R. Ambedkar, NOT Mahatma Gandhi).\n"
+                f"3. Question max 280 chars, 4 options under 90 chars each, correct index 0-3, explanation max 140 chars.\n"
+                f"Return ONLY valid JSON array:\n"
                 f"[{{\"question\":\"...\",\"options\":[\"...\",\"...\",\"...\",\"...\"],\"correct_option_id\":0,\"explanation\":\"...\"}}]"
             )
             raw = ask_groq(prompt)
             data = parse_json_mcqs(raw)
-            pending_posts[post_id] = {"type": "quiz", "channel_id": ch_info["id"], "data": data}
+            pending_posts[post_id] = {
+                "type": "quiz",
+                "channel_id": ch_info["id"],
+                "data": data,
+                "timer": sess.get("timer")
+            }
             
             q1 = data[0]
-            preview = f"📋 *Quiz Preview (Total: {len(data)})*\n🎯 *Target:* `{ch_info['id']}`\n\n*Q1:* {q1['question']}\n\n"
+            mode_lbl = "⏱️ ४५ सेकंद टायमर" if sess.get("timer") else "♾️ कायम चालू (Normal)"
+            preview = (
+                f"📋 *Quiz Preview (Total: {len(data)})*\n"
+                f"🎯 *Target:* `{ch_info['id']}` | *Mode:* {mode_lbl}\n\n"
+                f"*Q1:* {q1['question']}\n\n"
+            )
             for i, o in enumerate(q1['options']):
                 preview += f"{'✅' if i == q1['correct_option_id'] else '⚪'} {chr(65+i)}. {o}\n"
             preview += f"\n💡 *Explanation:* {q1['explanation']}"
 
         elif fmt == "mnemonic":
-            prompt = f"Create a memorable MNEMONIC / SHORT TRICK in {lang_str} for subject '{ch_info['sub']}' on topic '{topic}'. Use emojis, bold text, clear breakdown."
+            prompt = f"Create a memorable MNEMONIC / SHORT TRICK in {lang_str} for subject '{ch_info['sub']}' on topic '{topic}'. Ensure 100% historical accuracy (Mahad Satyagraha = Dr. Ambedkar). Use emojis, bold text, clear breakdown."
             text = ask_groq(prompt)
             pending_posts[post_id] = {"type": "mnemonic", "channel_id": ch_info["id"], "data": text}
             preview = f"📋 *Mnemonic Preview*\n🎯 *Target:* `{ch_info['id']}`\n\n{text}"
 
         else: # notes
-            prompt = f"Create a 1-Minute Quick Revision Note in {lang_str} for '{ch_info['sub']}' on topic '{topic}'. 4-5 high-yield bullet points with emojis, key articles/facts, and exam traps."
+            prompt = f"Create a 1-Minute Quick Revision Note in {lang_str} for '{ch_info['sub']}' on topic '{topic}'. Ensure strict historical accuracy (Mahad Satyagraha = Dr. Ambedkar). 4-5 high-yield bullet points with emojis, key articles/facts, and exam traps."
             text = ask_groq(prompt)
             pending_posts[post_id] = {"type": "notes", "channel_id": ch_info["id"], "data": text}
             preview = f"📋 *Quick Notes Preview*\n🎯 *Target:* `{ch_info['id']}`\n\n{text}"
 
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🚀 चॅनलवर पोस्ट करा", callback_data=f"pub_{post_id}"))
-        markup.add(types.InlineKeyboardButton("❌ रद्द करा", callback_data="can_"))
+        markup.add(types.InlineKeyboardButton("❌ रद्द करा (Cancel)", callback_data="can_"))
         bot.edit_message_text(preview, cid, mid, reply_markup=markup, parse_mode="Markdown")
 
     except Exception as e:
