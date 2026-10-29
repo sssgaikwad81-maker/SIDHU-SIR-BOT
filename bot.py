@@ -75,7 +75,8 @@ threading.Thread(target=keep_render_awake, daemon=True).start()
 # 1. CREDENTIALS & CHANNELS
 # ------------------------------------------------------------------------------
 TELEGRAM_BOT_TOKEN = "9253804253:AAG3NaTU704bmw00hznomU1NKgsl0g4JgvU"
-GROQ_API_KEY = "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"
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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").strip()
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 
 CHANNELS = {
     "upsc_polity": {"title": "🏛️ Polity (UPSC)", "id": "@polity_quiz_mcq", "sub": "Indian Polity & Constitution", "lang": "English", "lvl": "upsc"},
@@ -148,6 +149,45 @@ def get_vision_model():
         if any(v in m.lower() for v in ["qwen", "vision", "scout"]):
             return m
     return "qwen/qwen3.8-27b"
+
+def ask_claude(prompt: str, json_mode: bool = False, system_rules: str = "") -> str:
+    """Calls Anthropic Claude 3.5 Haiku with premium Marathi/English reasoning."""
+    if not ANTHROPIC_API_KEY:
+        return None
+    url = "https://api.anthropic.com/v1/messages"
+    headers = {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json"
+    }
+    sys_prompt = system_rules
+    if json_mode:
+        sys_prompt += "\nIMPORTANT: Output strictly a valid, raw JSON object matching the requested schema. Do not include markdown codeblocks or conversational text."
+    
+    payload = {
+        "model": "claude-3-5-haiku-20241022",
+        "max_tokens": 4096,
+        "temperature": 0.2,
+        "system": sys_prompt,
+        "messages": [
+            {"role": "user", "content": prompt}
+        ]
+    }
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=50)
+        if resp.status_code == 200:
+            data = resp.json()
+            content_blocks = data.get("content", [])
+            if content_blocks and len(content_blocks) > 0:
+                txt = content_blocks[0].get("text", "")
+                if txt and txt.strip():
+                    return txt
+            logging.warning(f"Claude empty response: {resp.text}")
+        else:
+            logging.warning(f"Claude API HTTP {resp.status_code}: {resp.text}")
+    except Exception as e:
+        logging.warning(f"Claude request error: {e}")
+    return None
 
 def ask_groq(prompt: str, json_mode: bool = False) -> str:
     url = "https://api.groq.com/openai/v1/chat/completions"
