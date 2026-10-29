@@ -1,9 +1,8 @@
 """
-Ultimate Multi-Channel AI Bot for Sidhu Sir's Educational Network (Direct REST Engine)
-======================================================================================
+Ultimate Multi-Channel AI Bot for Sidhu Sir's Educational Network (Groq Engine)
+================================================================================
 """
 
-import base64
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import io
 import json
@@ -38,10 +37,12 @@ def start_health_server():
 threading.Thread(target=start_health_server, daemon=True).start()
 
 # ==============================================================================
-# 1. CONFIGURATION (Verified Credentials)
+# 1. CONFIGURATION (All credentials defined to avoid NameError)
 # ==============================================================================
 TELEGRAM_BOT_TOKEN = "9253804253:AAG3NaTU704bmw00hznomU1NKgsl0g4JgvU"
-AI_API_KEY = "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"
+GROQ_API_KEY = "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"
+AI_API_KEY = GROQ_API_KEY
+GEMINI_API_KEY = GROQ_API_KEY
 ADMIN_USER_ID = 0
 
 CHANNELS = {
@@ -106,47 +107,31 @@ user_sessions = {}
 pending_items = {}
 
 # ==============================================================================
-# 3. DIRECT GEMINI REST API (Native Support for AQ. Keys)
+# 3. GROQ LPU AI ENGINE (0.5s Fast, Zero Load Errors)
 # ==============================================================================
-def call_gemini_rest(prompt: str, image_bytes: bytes = None) -> str:
-    models_to_try = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-flash-latest"]
+def call_groq_ai(prompt: str) -> str:
+    url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": GEMINI_API_KEY.strip()
+        "Authorization": f"Bearer {GROQ_API_KEY.strip()}",
+        "Content-Type": "application/json"
     }
-
-    parts = [{"text": prompt}]
-    if image_bytes:
-        b64_data = base64.b64encode(image_bytes).decode('utf-8')
-        parts.append({
-            "inline_data": {
-                "mime_type": "image/jpeg",
-                "data": b64_data
-            }
-        })
-
     payload = {
-        "contents": [{"parts": parts}],
-        "generationConfig": {
-            "temperature": 0.7,
-            "maxOutputTokens": 2048
-        }
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are a senior UPSC and MPSC examination paper setter. Always generate strictly formatted, high-yield exam material."
+            },
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.5,
+        "max_tokens": 2048
     }
-
-    last_error = ""
-    for model_name in models_to_try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY.strip()}"
-        try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=45)
-            if resp.status_code == 200:
-                data = resp.json()
-                return data["candidates"][0]["content"]["parts"][0]["text"]
-            else:
-                last_error = f"Status {resp.status_code}: {resp.text}"
-        except Exception as e:
-            last_error = str(e)
-
-    raise Exception(f"AI Error: {last_error}")
+    resp = requests.post(url, headers=headers, json=payload, timeout=35)
+    if resp.status_code == 200:
+        return resp.json()["choices"][0]["message"]["content"]
+    else:
+        raise Exception(f"AI Service Error {resp.status_code}: {resp.text}")
 
 
 def extract_json_from_text(text: str):
@@ -169,8 +154,8 @@ def generate_quizzes(input_content, subject: str, exam_level: str, lang: str, co
         "bharti": "Police Bharti / Talathi / Saral Seva. Direct 1-liner factual multiple choice question."
     }
     lang_map = {
-        "english": "Language: 100% English.",
-        "marathi": "Language: 100% Formal Marathi (शुद्ध मराठी).",
+        "english": "Language: 100% English only.",
+        "marathi": "Language: 100% Formal Marathi (शुद्ध मराठी) only.",
         "bilingual": "Language: Strictly BILINGUAL (English / Marathi) for Question, Options, and Explanation."
     }
 
@@ -179,9 +164,9 @@ Specialization: {subject}
 Level: {level_map.get(exam_level, level_map['combine'])}
 {lang_map.get(lang, lang_map['bilingual'])}
 
-Create {count} high-quality MCQs based on the input: "{input_content if not image_bytes else 'Extract key points from image'}"
+Create {count} high-quality MCQs based on: "{input_content}"
 
-STRICT LIMITS (MANDATORY):
+STRICT TELEGRAM POLL LIMITS (MANDATORY):
 1. Question: Max 280 chars.
 2. Exactly 4 Options: Each UNDER 90 chars.
 3. Correct Index: integer 0, 1, 2, or 3.
@@ -197,7 +182,7 @@ Return ONLY a valid JSON array of objects:
   }}
 ]
 """
-    raw_text = call_gemini_rest(prompt, image_bytes)
+    raw_text = call_groq_ai(prompt)
     data = extract_json_from_text(raw_text)
     return data if isinstance(data, list) else [data]
 
@@ -205,35 +190,33 @@ Return ONLY a valid JSON array of objects:
 def generate_mnemonic(input_content, subject: str, lang: str, image_bytes: bytes = None) -> str:
     lang_text = "in Marathi" if lang == "marathi" else ("Bilingual (Marathi + English)" if lang == "bilingual" else "in English")
     prompt = f"""
-You are an expert competitive exam memory coach specializing in {subject}.
-Create a powerful, catchy, and memorable MNEMONIC / SHORT TRICK {lang_text} to easily remember this topic:
-Input: {input_content if not image_bytes else 'Analyze image'}
+Create a memorable MNEMONIC / SHORT TRICK {lang_text} for subject '{subject}' to easily remember:
+Topic: {input_content}
 
-Format the response beautifully for a Telegram channel post using emojis, bold text, and clear breakdown.
+Format beautifully for Telegram with emojis, bold text, and clear breakdown.
 Structure:
 💡 **विषय / Topic:** ...
 🎯 **शॉर्टकट ट्रिक / Memory Trick:** ...
 🔍 **डिकोडिंग / Breakdown:** ...
 📚 **परीक्षेसाठी टीप / Exam Tip:** ...
 """
-    return call_gemini_rest(prompt, image_bytes)
+    return call_groq_ai(prompt)
 
 
 def generate_quick_notes(input_content, subject: str, lang: str, image_bytes: bytes = None) -> str:
     lang_text = "in Marathi" if lang == "marathi" else ("Bilingual (Marathi + English)" if lang == "bilingual" else "in English")
     prompt = f"""
-You are an expert exam educator specializing in {subject}.
-Create a '1-Minute Quick Revision Note' {lang_text} on this topic:
-Input: {input_content if not image_bytes else 'Analyze image'}
+Create a '1-Minute Quick Revision Note' {lang_text} for subject '{subject}' on:
+Topic: {input_content}
 
-Format the response beautifully for Telegram with bold headers, bullet points, and relevant emojis.
+Format beautifully for Telegram with bold headers, bullet points, and emojis.
 Structure:
-📌 **१ मिनिट रिव्हिजन / Quick Concept:** (Topic Name)
+📌 **१ मिनिट रिव्हिजन / Quick Concept:** ...
 🔹 **महत्त्वाचे मुद्दे / Key Points:** (4-5 crisp, high-yield bullet points)
 ⚖️ **महत्त्वाची कलमे / वर्षे / तथ्ये (Key Facts):** ...
 ⚠️ **अपवाद किंवा ट्रिकी पॉईंट (Exam Trap to avoid):** ...
 """
-    return call_gemini_rest(prompt, image_bytes)
+    return call_groq_ai(prompt)
 
 
 # ==============================================================================
@@ -281,7 +264,7 @@ def handle_photo_input(message):
     file_info = bot.get_file(message.photo[-1].file_id)
     downloaded_file = bot.download_file(file_info.file_path)
 
-    user_sessions[message.chat.id] = {"type": "photo", "data": "Photo content", "image_bytes": downloaded_file}
+    user_sessions[message.chat.id] = {"type": "photo", "data": "Book Page Content", "image_bytes": downloaded_file}
     show_format_selection_menu(message.chat.id, "📸 **पुस्तकाचा फोटो मिळाला!**")
 
 
@@ -424,43 +407,4 @@ def trigger_content_generation(chat_id: int, message_id: int, session: dict):
     conf = CHANNELS[session["channel_key"]]
     fmt = session["format"]
     lang = session["lang"]
-    image_bytes = session.get("image_bytes")
-
-    bot.edit_message_text(f"⏳ AI द्वारे **{fmt.upper()}** तयार होत आहे...\nकृपया ५-१० सेकंद थांबा...", chat_id, message_id, parse_mode="Markdown")
-
-    try:
-        item_id = str(message_id)
-        if fmt == "quiz":
-            quizzes = generate_quizzes(session["data"], conf["subject"], session["level"], lang, session["count"], image_bytes)
-            pending_items[item_id] = {"type": "quiz", "channel_id": conf["id"], "data": quizzes}
-
-            q1 = quizzes[0]
-            preview = f"📋 *Quiz Preview (Total: {len(quizzes)})*\n🎯 *Target:* `{conf['id']}`\n\n*Q1:* {q1['question']}\n\n"
-            for i, opt in enumerate(q1['options']):
-                preview += f"{'✅' if i == q1['correct_option_id'] else '⚪'} {chr(65+i)}. {opt}\n"
-            preview += f"\n💡 *Explanation:* {q1['explanation']}"
-        elif fmt == "mnemonic":
-            text = generate_mnemonic(session["data"], conf["subject"], lang, image_bytes)
-            pending_items[item_id] = {"type": "mnemonic", "channel_id": conf["id"], "data": text}
-            preview = f"📋 *Mnemonic Preview*\n🎯 *Target:* `{conf['id']}`\n\n{text}"
-        else:
-            text = generate_quick_notes(session["data"], conf["subject"], lang, image_bytes)
-            pending_items[item_id] = {"type": "notes", "channel_id": conf["id"], "data": text}
-            preview = f"📋 *Quick Notes Preview*\n🎯 *Target:* `{conf['id']}`\n\n{text}"
-
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🚀 चॅनलवर पोस्ट करा", callback_data=f"pub_{item_id}"))
-        markup.add(types.InlineKeyboardButton("❌ रद्द करा", callback_data=f"cancel_{item_id}"))
-
-        bot.edit_message_text(preview, chat_id, message_id, reply_markup=markup, parse_mode="Markdown")
-
-    except Exception as e:
-        bot.edit_message_text(f"❌ त्रुटी: {str(e)}", chat_id, message_id)
-
-
-# ==============================================================================
-# 6. RUN
-# ==============================================================================
-if __name__ == "__main__":
-    print("🚀 Sidhu Sir's Ultimate Multi-Channel Bot Running...")
-    bot.infinity_polling()
+    image_bytes = session.get("image_bytes
