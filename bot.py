@@ -13,7 +13,7 @@ Features:
 5. 📋 Full Question Preview (Displays ALL generated questions Q1, Q2, Q3, Q4, Q5... before posting).
 6. ♾️ Normal Quiz (Permanent open) vs ⏱️ Live Test (45s Timer).
 7. 📊 Quizzes, 💡 Mnemonics, 📌 Quick Notes for all 7 channels.
-8. 🛡️ Bulletproof Model Fallback: Prioritizes Llama 3.3/3.1 and auto-retries across reliable engines.
+8. 🛡️ Native Groq JSON Mode & Multi-Tier Fallback Parser: Zero 'Expecting value' errors!
 """
 
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -76,7 +76,7 @@ user_sessions = {}
 pending_posts = {}
 
 # ------------------------------------------------------------------------------
-# 2. BULLETPROOF GROQ AI ENGINE WITH AUTO-FALLBACK & STRICT GUARDRAILS
+# 2. BULLETPROOF GROQ AI ENGINE WITH AUTO-FALLBACK & NATIVE JSON MODE
 # ------------------------------------------------------------------------------
 PREFERRED_TEXT_MODELS = [
     "llama-3.3-70b-versatile",
@@ -109,13 +109,11 @@ def get_active_groq_model(vision=False):
         if r.status_code == 200:
             available = [m["id"] for m in r.json().get("data", [])]
 
-            # Priority 1: Match against reliable text models
             for pref in PREFERRED_TEXT_MODELS:
                 if pref in available:
                     cached_groq_text_model = pref
                     break
 
-            # Priority 2: Match against reliable vision models
             for pref in PREFERRED_VISION_MODELS:
                 if pref in available:
                     cached_groq_vision_model = pref
@@ -127,7 +125,7 @@ def get_active_groq_model(vision=False):
         return cached_groq_vision_model or "qwen/qwen3.8-27b"
     return cached_groq_text_model or "llama-3.3-70b-versatile"
 
-def ask_groq(prompt: str) -> str:
+def ask_groq(prompt: str, json_mode: bool = False) -> str:
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {GROQ_API_KEY.strip()}", "Content-Type": "application/json"}
 
@@ -169,10 +167,16 @@ def ask_groq(prompt: str) -> str:
             "temperature": 0.25,
             "max_tokens": 2048
         }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=35)
             if resp.status_code == 200:
-                return resp.json()["choices"][0]["message"]["content"]
+                content = resp.json()["choices"][0]["message"]["content"]
+                if content and content.strip():
+                    return content
+                last_error = f"Empty content from {model_name}"
             else:
                 last_error = f"AI Error ({model_name}): {resp.status_code} {resp.text}"
                 continue
@@ -182,12 +186,81 @@ def ask_groq(prompt: str) -> str:
 
     raise Exception(last_error or "AI Generation failed.")
 
+def parse_plain_text_mcqs(text: str) -> list:
+    mcqs = []
+    blocks = re.split(r"(?:\n\s*|\A)(?:Q\s*\d+[\.:]|\d+[\.:])\s*", text)
+    for b in blocks:
+        b = b.strip()
+        if not b:
+            continue
+        opts = re.findall(r"(?:[A-Da-d][\.\)]|[\(][A-Da-d][\)])\s*(.+?)(?=(?:[A-Da-d][\.\)]|[\(][A-Da-d][\)]|उत्तर|Ans|Explanation|स्पष्टीकरण|\Z))", b, re.DOTALL)
+        if len(opts) >= 4:
+            q_lines = b.split("\n")[0].strip()
+            clean_opts = [o.strip() for o in opts[:4]]
+            ans_match = re.search(r"(?:उत्तर|Ans|Correct)\s*[:\-]?\s*([A-Da-d])", b)
+            corr_idx = 0
+            if ans_match:
+                corr_idx = ord(ans_match.group(1).upper()) - ord("A")
+            exp_match = re.search(r"(?:स्पष्टीकरण|Explanation)\s*[:\-]?\s*(.+)", b, re.DOTALL)
+            exp = exp_match.group(1).strip()[:140] if exp_match else "MPSC संदर्भ नोट्सनुसार अचूक उत्तर."
+            mcqs.append({
+                "question": q_lines[:280],
+                "options": clean_opts,
+                "correct_option_id": corr_idx if 0 <= corr_idx <= 3 else 0,
+                "explanation": exp
+            })
+    return mcqs
+
 def parse_json_mcqs(text: str) -> list:
-    clean = re.sub(r"```json\s*", "", text)
-    clean = re.sub(r"```\s*$", "", clean).strip()
-    match = re.search(r"(\[.*\]|\{.*\})", clean, re.DOTALL)
-    data = json.loads(match.group(1) if match else clean)
-    return data if isinstance(data, list) else [data]
+    if not text:
+        raise Exception("AI कडून रिकामे उत्तर आले.")
+
+    cleaned = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.MULTILINE)
+    cleaned = re.sub(r"\s*```$", "", cleaned.strip(), flags=re.MULTILINE).strip()
+
+    # Strategy 1: Direct JSON parse
+    try:
+        data = json.loads(cleaned)
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            for key in ["questions", "mcqs", "quiz", "data"]:
+                if key in data and isinstance(data[key], list):
+                    return data[key]
+            if "question" in data and "options" in data:
+                return [data]
+    except Exception:
+        pass
+
+    # Strategy 2: Array regex extract
+    arr_match = re.search(r"\[\s*\{.*\}\s*\]", text, re.DOTALL)
+    if arr_match:
+        try:
+            data = json.loads(arr_match.group(0))
+            if isinstance(data, list):
+                return data
+        except Exception:
+            pass
+
+    # Strategy 3: Object regex extract
+    obj_match = re.search(r"\{\s*\"(?:questions|mcqs|data|question)\".*\}", text, re.DOTALL)
+    if obj_match:
+        try:
+            data = json.loads(obj_match.group(0))
+            for key in ["questions", "mcqs", "quiz", "data"]:
+                if key in data and isinstance(data[key], list):
+                    return data[key]
+            if "question" in data:
+                return [data]
+        except Exception:
+            pass
+
+    # Strategy 4: Plain text numbered MCQ fallback
+    parsed = parse_plain_text_mcqs(text)
+    if parsed:
+        return parsed
+
+    raise Exception(f"AI उत्तरामधून प्रश्न काढता आले नाहीत. कृपया पुन्हा प्रयत्न करा.")
 
 # ------------------------------------------------------------------------------
 # 3. INPUT HANDLERS: TEXT, PHOTO, PDF, WORD DOC & MANUAL EDIT
@@ -597,10 +670,19 @@ def run_content_generation(cid, mid, sess):
                 f"   - NEVER say a leader 'सादर केले' (introduced) unless it was officially introduced in a legislative assembly or parliament. E.g., for 1895 Swaraj Bill, the correct wording MUST BE: '१८९५ चे स्वराज्य विधेयक (Constitution of India Bill) कोणाच्या प्रेरणेने/मार्गदर्शनाखाली तयार करण्यात आले होते?'.\n"
                 f"   - Questions, options, and explanations must be grammatically flawless and academically precise in standard Marathi.\n"
                 f"3. Question max 280 chars, 4 options under 90 chars each, correct index 0-3, explanation max 140 chars.\n"
-                f"Return ONLY valid JSON array:\n"
-                f"[{{\"question\":\"...\",\"options\":[\"...\",\"...\",\"...\",\"...\"],\"correct_option_id\":0,\"explanation\":\"...\"}}]"
+                f"Output MUST be a valid JSON object in this exact format:\n"
+                f"{{\n"
+                f"  \"questions\": [\n"
+                f"    {{\n"
+                f"      \"question\": \"...\",\n"
+                f"      \"options\": [\"A\", \"B\", \"C\", \"D\"],\n"
+                f"      \"correct_option_id\": 0,\n"
+                f"      \"explanation\": \"...\"\n"
+                f"    }}\n"
+                f"  ]\n"
+                f"}}"
             )
-            raw = ask_groq(prompt)
+            raw = ask_groq(prompt, json_mode=True)
             data = parse_json_mcqs(raw)
             pending_posts[post_id] = {
                 "type": "quiz",
@@ -611,12 +693,12 @@ def run_content_generation(cid, mid, sess):
 
         elif fmt == "mnemonic":
             prompt = f"Create a memorable MNEMONIC / SHORT TRICK in {lang_str} for subject '{ch_info['sub']}' on topic '{topic}'. Ensure 100% historical accuracy. Use emojis, bold text, clear breakdown."
-            text = ask_groq(prompt)
+            text = ask_groq(prompt, json_mode=False)
             pending_posts[post_id] = {"type": "mnemonic", "channel_id": ch_info["id"], "data": text}
 
         else: # notes
             prompt = f"Create a 1-Minute Quick Revision Note in {lang_str} for '{ch_info['sub']}' on topic '{topic}'. Ensure strict historical accuracy. 4-5 high-yield bullet points with emojis, key articles/facts, and exam traps."
-            text = ask_groq(prompt)
+            text = ask_groq(prompt, json_mode=False)
             pending_posts[post_id] = {"type": "notes", "channel_id": ch_info["id"], "data": text}
 
         render_preview_message(cid, mid, post_id, sess)
@@ -674,4 +756,4 @@ def render_preview_message(cid, mid, post_id, sess):
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     print("🚀 Sidhu Sir's Bot is online 24/7!")
-    bot.infinity_polling()
+    bot.infinity_polling(timeout=20, long_polling_timeout=10, skip_pending=True)
