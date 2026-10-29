@@ -407,4 +407,4 @@ def trigger_content_generation(chat_id: int, message_id: int, session: dict):
     conf = CHANNELS[session["channel_key"]]
     fmt = session["format"]
     lang = session["lang"]
-    image_bytes = session.get("image_bytes
+    image_bytes = session.get("image_bytes")
