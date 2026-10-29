@@ -1,18 +1,20 @@
 """
-Ultimate Multi-Channel AI Bot for Sidhu Sir's Educational Network
-==================================================================
+Ultimate Multi-Channel AI Bot for Sidhu Sir's Educational Network (Direct REST Engine)
+======================================================================================
 """
 
+import base64
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import io
 import json
 import logging
 import os
+import re
 import threading
 import time
 import telebot
 from telebot import types
-import google.generativeai as genai
+import requests
 from PIL import Image
 
 # ==============================================================================
@@ -36,7 +38,7 @@ def start_health_server():
 threading.Thread(target=start_health_server, daemon=True).start()
 
 # ==============================================================================
-# 1. CONFIGURATION (Your Live Credentials)
+# 1. CONFIGURATION (Verified Credentials)
 # ==============================================================================
 TELEGRAM_BOT_TOKEN = "9253804253:AAG3NaTU704bmw00hznomU1NKgsl0g4JgvU"
 GEMINI_API_KEY = "AQ.Ab8RN6KgyFsfQFkls0DV93sjEaMvGT3mMzYH_2H2QM2ZZpHSEw"
@@ -99,15 +101,67 @@ CHANNELS = {
 # ==============================================================================
 logging.basicConfig(level=logging.INFO)
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
-genai.configure(api_key=GEMINI_API_KEY)
 
 user_sessions = {}
 pending_items = {}
 
 # ==============================================================================
-# 3. AI GENERATION ENGINES
+# 3. DIRECT GEMINI REST API (Native Support for AQ. Keys)
 # ==============================================================================
-def generate_quizzes(input_content, subject: str, exam_level: str, lang: str, count: int = 1, is_image: bool = False) -> list:
+def call_gemini_rest(prompt: str, image_bytes: bytes = None) -> str:
+    models_to_try = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-flash-latest"]
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": GEMINI_API_KEY.strip()
+    }
+
+    parts = [{"text": prompt}]
+    if image_bytes:
+        b64_data = base64.b64encode(image_bytes).decode('utf-8')
+        parts.append({
+            "inline_data": {
+                "mime_type": "image/jpeg",
+                "data": b64_data
+            }
+        })
+
+    payload = {
+        "contents": [{"parts": parts}],
+        "generationConfig": {
+            "temperature": 0.7,
+            "maxOutputTokens": 2048
+        }
+    }
+
+    last_error = ""
+    for model_name in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY.strip()}"
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=45)
+            if resp.status_code == 200:
+                data = resp.json()
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+            else:
+                last_error = f"Status {resp.status_code}: {resp.text}"
+        except Exception as e:
+            last_error = str(e)
+
+    raise Exception(f"AI Error: {last_error}")
+
+
+def extract_json_from_text(text: str):
+    clean = re.sub(r"```json\s*", "", text)
+    clean = re.sub(r"```\s*$", "", clean).strip()
+    match = re.search(r"(\[.*\]|\{.*\})", clean, re.DOTALL)
+    if match:
+        clean = match.group(1)
+    return json.loads(clean)
+
+
+# ==============================================================================
+# 4. CONTENT GENERATION ENGINES
+# ==============================================================================
+def generate_quizzes(input_content, subject: str, exam_level: str, lang: str, count: int = 1, image_bytes: bytes = None) -> list:
     level_map = {
         "upsc": "UPSC Civil Services Prelims Latest Pattern. Statement-based or 'How many are correct' format.",
         "rajyaseva": "MPSC State Services (Rajyaseva) Prelims. Deep conceptual multiple statements.",
@@ -125,14 +179,15 @@ Specialization: {subject}
 Level: {level_map.get(exam_level, level_map['combine'])}
 {lang_map.get(lang, lang_map['bilingual'])}
 
-Create {count} high-quality MCQs based on the input.
-STRICT LIMITS:
+Create {count} high-quality MCQs based on the input: "{input_content if not image_bytes else 'Extract key points from image'}"
+
+STRICT LIMITS (MANDATORY):
 1. Question: Max 280 chars.
-2. 4 Options: Each UNDER 90 chars.
-3. Correct Index: 0, 1, 2, or 3.
+2. Exactly 4 Options: Each UNDER 90 chars.
+3. Correct Index: integer 0, 1, 2, or 3.
 4. Explanation: Max 140 chars.
 
-Return ONLY a JSON array of objects:
+Return ONLY a valid JSON array of objects:
 [
   {{
     "question": "string",
@@ -142,22 +197,17 @@ Return ONLY a JSON array of objects:
   }}
 ]
 """
-    model = genai.GenerativeModel("gemini-1.5-flash")
-    if is_image:
-        resp = model.generate_content([prompt, "Extract key exam points from this image:", input_content], generation_config={"response_mime_type": "application/json"})
-    else:
-        resp = model.generate_content(f"{prompt}\n\nInput Topic/Notes:\n{input_content}", generation_config={"response_mime_type": "application/json"})
-
-    data = json.loads(resp.text)
+    raw_text = call_gemini_rest(prompt, image_bytes)
+    data = extract_json_from_text(raw_text)
     return data if isinstance(data, list) else [data]
 
 
-def generate_mnemonic(input_content, subject: str, lang: str, is_image: bool = False) -> str:
+def generate_mnemonic(input_content, subject: str, lang: str, image_bytes: bytes = None) -> str:
     lang_text = "in Marathi" if lang == "marathi" else ("Bilingual (Marathi + English)" if lang == "bilingual" else "in English")
     prompt = f"""
 You are an expert competitive exam memory coach specializing in {subject}.
 Create a powerful, catchy, and memorable MNEMONIC / SHORT TRICK {lang_text} to easily remember this topic:
-Input: {input_content}
+Input: {input_content if not image_bytes else 'Analyze image'}
 
 Format the response beautifully for a Telegram channel post using emojis, bold text, and clear breakdown.
 Structure:
@@ -166,20 +216,15 @@ Structure:
 🔍 **डिकोडिंग / Breakdown:** ...
 📚 **परीक्षेसाठी टीप / Exam Tip:** ...
 """
-    model = genai.GenerativeModel("gemini-1.5-flash")
-    if is_image:
-        resp = model.generate_content([prompt, input_content])
-    else:
-        resp = model.generate_content(prompt)
-    return resp.text.strip()
+    return call_gemini_rest(prompt, image_bytes)
 
 
-def generate_quick_notes(input_content, subject: str, lang: str, is_image: bool = False) -> str:
+def generate_quick_notes(input_content, subject: str, lang: str, image_bytes: bytes = None) -> str:
     lang_text = "in Marathi" if lang == "marathi" else ("Bilingual (Marathi + English)" if lang == "bilingual" else "in English")
     prompt = f"""
 You are an expert exam educator specializing in {subject}.
 Create a '1-Minute Quick Revision Note' {lang_text} on this topic:
-Input: {input_content}
+Input: {input_content if not image_bytes else 'Analyze image'}
 
 Format the response beautifully for Telegram with bold headers, bullet points, and relevant emojis.
 Structure:
@@ -188,16 +233,11 @@ Structure:
 ⚖️ **महत्त्वाची कलमे / वर्षे / तथ्ये (Key Facts):** ...
 ⚠️ **अपवाद किंवा ट्रिकी पॉईंट (Exam Trap to avoid):** ...
 """
-    model = genai.GenerativeModel("gemini-1.5-flash")
-    if is_image:
-        resp = model.generate_content([prompt, input_content])
-    else:
-        resp = model.generate_content(prompt)
-    return resp.text.strip()
+    return call_gemini_rest(prompt, image_bytes)
 
 
 # ==============================================================================
-# 4. TELEGRAM HANDLERS
+# 5. TELEGRAM HANDLERS
 # ==============================================================================
 def is_admin(user_id: int) -> bool:
     return ADMIN_USER_ID == 0 or user_id == ADMIN_USER_ID
@@ -229,7 +269,7 @@ def handle_text_input(message):
     if not topic or topic.startswith('/'):
         return
 
-    user_sessions[message.chat.id] = {"type": "text", "data": topic}
+    user_sessions[message.chat.id] = {"type": "text", "data": topic, "image_bytes": None}
     show_format_selection_menu(message.chat.id, f"📝 **विषय:** `{topic}`")
 
 
@@ -240,9 +280,8 @@ def handle_photo_input(message):
 
     file_info = bot.get_file(message.photo[-1].file_id)
     downloaded_file = bot.download_file(file_info.file_path)
-    image = Image.open(io.BytesIO(downloaded_file))
 
-    user_sessions[message.chat.id] = {"type": "photo", "data": image}
+    user_sessions[message.chat.id] = {"type": "photo", "data": "Photo content", "image_bytes": downloaded_file}
     show_format_selection_menu(message.chat.id, "📸 **पुस्तकाचा फोटो मिळाला!**")
 
 
@@ -385,14 +424,14 @@ def trigger_content_generation(chat_id: int, message_id: int, session: dict):
     conf = CHANNELS[session["channel_key"]]
     fmt = session["format"]
     lang = session["lang"]
-    is_image = (session["type"] == "photo")
+    image_bytes = session.get("image_bytes")
 
-    bot.edit_message_text(f"⏳ AI द्वारे **{fmt.upper()}** तयार होत आहे...\nकृपया थांबा...", chat_id, message_id, parse_mode="Markdown")
+    bot.edit_message_text(f"⏳ AI द्वारे **{fmt.upper()}** तयार होत आहे...\nकृपया ५-१० सेकंद थांबा...", chat_id, message_id, parse_mode="Markdown")
 
     try:
         item_id = str(message_id)
         if fmt == "quiz":
-            quizzes = generate_quizzes(session["data"], conf["subject"], session["level"], lang, session["count"], is_image)
+            quizzes = generate_quizzes(session["data"], conf["subject"], session["level"], lang, session["count"], image_bytes)
             pending_items[item_id] = {"type": "quiz", "channel_id": conf["id"], "data": quizzes}
 
             q1 = quizzes[0]
@@ -401,11 +440,11 @@ def trigger_content_generation(chat_id: int, message_id: int, session: dict):
                 preview += f"{'✅' if i == q1['correct_option_id'] else '⚪'} {chr(65+i)}. {opt}\n"
             preview += f"\n💡 *Explanation:* {q1['explanation']}"
         elif fmt == "mnemonic":
-            text = generate_mnemonic(session["data"], conf["subject"], lang, is_image)
+            text = generate_mnemonic(session["data"], conf["subject"], lang, image_bytes)
             pending_items[item_id] = {"type": "mnemonic", "channel_id": conf["id"], "data": text}
             preview = f"📋 *Mnemonic Preview*\n🎯 *Target:* `{conf['id']}`\n\n{text}"
         else:
-            text = generate_quick_notes(session["data"], conf["subject"], lang, is_image)
+            text = generate_quick_notes(session["data"], conf["subject"], lang, image_bytes)
             pending_items[item_id] = {"type": "notes", "channel_id": conf["id"], "data": text}
             preview = f"📋 *Quick Notes Preview*\n🎯 *Target:* `{conf['id']}`\n\n{text}"
 
@@ -420,7 +459,7 @@ def trigger_content_generation(chat_id: int, message_id: int, session: dict):
 
 
 # ==============================================================================
-# 5. RUN
+# 6. RUN
 # ==============================================================================
 if __name__ == "__main__":
     print("🚀 Sidhu Sir's Ultimate Multi-Channel Bot Running...")
