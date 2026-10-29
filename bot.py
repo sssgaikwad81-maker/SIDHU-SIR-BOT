@@ -1,26 +1,30 @@
 """
-Sidhu Sir's Ultimate Multi-Channel AI Bot (Two-Part UPSC/MPSC Cards + Distinct Line Statements)
-================================================================================================
+Sidhu Sir's Ultimate Multi-Channel AI Bot (Exact UPSC/MPSC Numbering Auto-Standardizer + Bulk 63/100+)
+=======================================================================================================
 Features:
-1. 🏛️ Two-Part Card + Poll Strategy for UPSC & MPSC Rajyaseva:
-   - For long / analytical questions (> 250 chars or multi-statement questions):
-     Part 1: Beautiful Rich Text Question Card with statements clearly separated ONE BELOW THE OTHER.
-     Part 2: Clickable Native Telegram Quiz Poll immediately below with authentic options & confetti!
-   - For short 1-liner questions: Posts directly as native quiz poll.
-2. 📑 Distinct Statement Formatting:
-   - Statements (अ), (ब), (क) and 1., 2., 3. are NEVER run-on or continuous.
-   - Automatically formatted with double line breaks for maximum readability.
-3. 🎯 UPSC vs MPSC Exact Numbering:
-   - UPSC: Statements 1., 2., 3. | Options (a), (b), (c), (d)
-   - MPSC राज्यसेवा: Statements (अ), (ब), (क) | Options १), २), ३), ४)
-   - MPSC Combine: Statements (अ), (ब) | Options १), २), ३), ४)
-   - पोलीस भरती: Direct 1-liner | Options १), २), ३), ४)
-4. 🚀 Bulk Question Support (50, 100, or Custom Count up to 200) with Live Progress Tracker.
-5. ⚡ Non-blocking Asynchronous Background Posting (Never freezes /start or uploads).
-6. 📑 As-Is PYQ Extraction vs 🤖 AI Generate choice.
-7. 🛠️ Question Management & Individual Option Editor Hub.
-8. 🔙 Universal Back button navigation on EVERY step.
-9. ♾️ Normal Quiz (Permanent open) vs ⏱️ Live Test (45s Timer).
+1. 🎯 Exact Exam Numbering Auto-Standardizer:
+   - 🚩 MPSC राज्यसेवा व Combine:
+     * विधाने: (अ), (ब), (क), (ड) (फाइलमध्ये (a), (b) असले तरी आपोआप (अ), (ब) मध्ये रूपांतरित!)
+     * पर्याय: १), २), ३), ४) (पर्यायांमधील (a)/(b) चा संदर्भही आपोआप (अ)/(ब) मध्ये!)
+   - 🏛️ UPSC Prelims:
+     * विधाने: 1., 2., 3., 4.
+     * पर्याय: (a), (b), (c), (d)
+   - 👮 पोलीस भरती: थेट १-ओळी प्रश्न + पर्याय १), २), ३), ४)
+2. 📚 Full Document Reading & Extraction (Supports 63, 100, up to 200 Questions):
+   - Reads up to 300,000 characters and 50 PDF pages.
+   - Never truncates at 8 questions!
+   - Multi-batch AI generation prevents Groq token limits.
+3. 🏛️ Two-Part Card + Poll Strategy for UPSC & MPSC Rajyaseva:
+   - Statements cleanly separated ONE BELOW THE OTHER with double line breaks.
+   - Part 1: Detailed Question Card.
+   - Part 2: Interactive Clickable Quiz Poll attached below.
+4. 📑 As-Is PYQ Extraction vs 🤖 AI Generate choice.
+5. 🛠️ Full Question & Option Editor Hub (Edit question, options 1-4, correct answer, delete question).
+6. 📋 Full Question Preview (Displays generated questions before posting).
+7. 🔙 Universal Back button navigation on EVERY step.
+8. ♾️ Normal Quiz (Permanent open) vs ⏱️ Live Test (45s Timer).
+9. 🚀 Non-blocking Background Posting with live counter (10/63, 20/63...) & 429 flood control.
+10. ⏱️ Active Render Self-Ping Keep-Alive Thread (Pings every 4 mins to prevent free container sleep).
 """
 
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -59,7 +63,19 @@ def run_health_server():
     server = HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 8080))), HealthCheckHandler)
     server.serve_forever()
 
+def keep_render_awake():
+    """Pings Render public URL every 4 minutes to prevent Render Free Web Service from sleeping."""
+    time.sleep(30)
+    render_url = os.environ.get("RENDER_EXTERNAL_URL", "https://sidhu-sir-bot.onrender.com")
+    while True:
+        try:
+            requests.get(render_url, timeout=10)
+        except Exception:
+            pass
+        time.sleep(240)
+
 threading.Thread(target=run_health_server, daemon=True).start()
+threading.Thread(target=keep_render_awake, daemon=True).start()
 
 # ------------------------------------------------------------------------------
 # 1. CREDENTIALS & CHANNELS
@@ -212,6 +228,96 @@ def format_statements_cleanly(text: str) -> str:
     t = re.sub(r"\n{3,}", "\n\n", t).strip()
     return t
 
+def standardize_mcq_for_exam(q: dict, lvl: str) -> dict:
+    """Strictly guarantees MPSC numbering: statements (अ), (ब), (क) and options १), २), ३), ४)
+    and UPSC numbering: statements 1., 2., 3. and options (a), (b), (c), (d)."""
+    question = q.get("question", "").strip()
+    options = list(q.get("options", []))[:4]
+
+    is_upsc = (lvl == "upsc")
+    is_mpsc = (lvl in ["rajyaseva", "combine"])
+
+    # 1. Standardize statements in question
+    if is_mpsc:
+        mpsc_map = {"a": "अ", "b": "ब", "c": "क", "d": "ड", "A": "अ", "B": "ब", "C": "क", "D": "ड"}
+        for eng_l, mar_l in mpsc_map.items():
+            question = re.sub(rf"\({eng_l}\)", f"({mar_l})", question)
+            question = re.sub(rf"(?:^|\n)\s*{eng_l}\.\s*", f"\n({mar_l}) ", question)
+    elif is_upsc:
+        mar_to_digit = {"(अ)": "1.", "(ब)": "2.", "(क)": "3.", "(ड)": "4.", "(a)": "1.", "(b)": "2.", "(c)": "3.", "(d)": "4."}
+        for mar_l, dig in mar_to_digit.items():
+            question = question.replace(mar_l, dig)
+
+    # 2. Standardize options numbering
+    clean_options = []
+    mar_digits = ["१)", "२)", "३)", "४)"]
+    upsc_letters = ["(a)", "(b)", "(c)", "(d)"]
+
+    for idx in range(4):
+        opt_text = options[idx].strip() if idx < len(options) else f"पर्याय {idx+1}"
+        # Strip existing leading 1., 1), A., A), १., १)
+        opt_text = re.sub(r"^[A-Da-d१-४1-4][\.\:\)]\s*", "", opt_text).strip()
+
+        if is_mpsc:
+            # Convert references (a) -> (अ) in option text
+            mpsc_map = {"(a)": "(अ)", "(b)": "(ब)", "(c)": "(क)", "(d)": "(ड)"}
+            for eng_l, mar_l in mpsc_map.items():
+                opt_text = opt_text.replace(eng_l, mar_l)
+            clean_options.append(f"{mar_digits[idx]} {opt_text}"[:90])
+        elif is_upsc:
+            clean_options.append(f"{upsc_letters[idx]} {opt_text}"[:90])
+        else:
+            clean_options.append(f"{mar_digits[idx]} {opt_text}"[:90])
+
+    q["question"] = question
+    q["options"] = clean_options
+    return q
+
+def parse_all_document_mcqs(text: str) -> list:
+    """Extracts all MCQs directly from document text without token limit."""
+    mcqs = []
+    blocks = re.split(r"(?:\n\s*|\A)(?:Q(?:uestion)?[\.\s]*\d+[\.:\)]|\d+[\.:\)]|प्रश्न\s*\d+[\.:\)])\s*", text, flags=re.IGNORECASE)
+
+    for b in blocks:
+        b = b.strip()
+        if not b:
+            continue
+        opt_pattern = r"(?:(?:\(([A-Da-d१-४1-4])\)|([A-Da-d१-४1-4])[\.\:\)])\s*(.+?))(?=(?:\(([A-Da-d१-४1-4])\)|([A-Da-d१-४1-4])[\.\:\)]|\n\s*(?:उत्तर|Ans|Correct|Explanation|Exp|स्पष्टीकरण)|$))"
+        matches = list(re.finditer(opt_pattern, b, re.DOTALL))
+
+        if len(matches) >= 4:
+            first_opt_pos = matches[0].start()
+            q_text = b[:first_opt_pos].strip()
+
+            clean_opts = []
+            for m in matches[:4]:
+                val = m.group(3).strip()
+                val = re.sub(r"\s+", " ", val)
+                clean_opts.append(val[:90])
+
+            ans_match = re.search(r"(?:उत्तर|Ans|Correct)\s*[:\-]?\s*([A-Da-d१-४1-4])", b, re.IGNORECASE)
+            corr_idx = 0
+            if ans_match:
+                ch = ans_match.group(1)
+                if ch in "1234":
+                    corr_idx = int(ch) - 1
+                elif ch in "१२३४":
+                    corr_idx = "१२३४".index(ch)
+                elif ch.upper() in "ABCD":
+                    corr_idx = ord(ch.upper()) - ord("A")
+
+            exp_match = re.search(r"(?:स्पष्टीकरण|Explanation|Exp)\s*[:\-]?\s*(.+)", b, re.IGNORECASE | re.DOTALL)
+            exp = exp_match.group(1).strip()[:140] if exp_match else "संदर्भ नोट्सनुसार अचूक उत्तर."
+
+            if q_text and len(clean_opts) == 4:
+                mcqs.append({
+                    "question": q_text,
+                    "options": clean_opts,
+                    "correct_option_id": corr_idx if 0 <= corr_idx <= 3 else 0,
+                    "explanation": exp
+                })
+    return mcqs
+
 def parse_plain_text_mcqs(text: str) -> list:
     mcqs = []
     blocks = re.split(r"(?:\n\s*|\A)(?:Q\s*\d+[\.:]|\d+[\.:])\s*", text)
@@ -290,6 +396,18 @@ def parse_json_mcqs(text: str) -> list:
 
     raise Exception(f"AI उत्तरामधून प्रश्न काढता आले नाहीत. कृपया पुन्हा प्रयत्न करा.")
 
+def get_batch_sizes(total_cnt, max_per_batch=15):
+    """Calculates safe batch sizes for large question requests (e.g. 50, 63, 100)."""
+    batches = []
+    rem = total_cnt
+    start = 1
+    while rem > 0:
+        sz = min(rem, max_per_batch)
+        batches.append((start, start + sz - 1, sz))
+        start += sz
+        rem -= sz
+    return batches
+
 # ------------------------------------------------------------------------------
 # 3. INPUT HANDLERS: TEXT, PHOTO, PDF, WORD DOC & MANUAL EDIT
 # ------------------------------------------------------------------------------
@@ -328,7 +446,7 @@ def handle_text(msg):
             show_timer_menu(msg.chat.id, mid)
             return
         else:
-            bot.reply_to(msg, "कृपया योग्य संख्या टाईप करा (उदा. 40, 75, 100).")
+            bot.reply_to(msg, "कृपया योग्य संख्या टाईप करा (उदा. 40, 63, 100).")
             return
 
     # Check if user is editing a question
@@ -404,7 +522,7 @@ def handle_photo(msg):
         extracted_text = extract_text_from_photo(img_bytes)
         bot.delete_message(msg.chat.id, status.message_id)
 
-        user_sessions[msg.chat.id] = {"topic": extracted_text[:2000], "source_type": "photo"}
+        user_sessions[msg.chat.id] = {"topic": extracted_text[:5000], "source_type": "photo"}
         show_format_menu(msg.chat.id, "📖 पुस्तकाचे पान (Photo Scanned)")
     except Exception as e:
         bot.edit_message_text(f"❌ फोटो वाचताना त्रुटी: {str(e)}", msg.chat.id, status.message_id)
@@ -432,7 +550,7 @@ def extract_text_from_photo(img_bytes: bytes) -> str:
         return resp.json()["choices"][0]["message"]["content"]
     raise Exception(f"Vision API Error ({model_name}): {resp.status_code} {resp.text[:100]}")
 
-# 3. Word Document (.docx) Extractor
+# 3. Word Document (.docx) Extractor (Reads entire document without truncation)
 def extract_text_from_docx(docx_bytes: bytes) -> str:
     try:
         with zipfile.ZipFile(io.BytesIO(docx_bytes)) as z:
@@ -447,7 +565,7 @@ def extract_text_from_docx(docx_bytes: bytes) -> str:
     except Exception:
         return ""
 
-# 4. Document Handler (PDF & Word .docx)
+# 4. Document Handler (PDF & Word .docx - Full capacity up to 300,000 characters)
 @bot.message_handler(content_types=['document'])
 def handle_doc(msg):
     fname = msg.document.file_name.lower() if msg.document.file_name else "file"
@@ -458,7 +576,7 @@ def handle_doc(msg):
         bot.reply_to(msg, "कृपया केवळ PDF, Word फाईल (.docx) किंवा पुस्तकाचा फोटो पाठवा.")
         return
 
-    status = bot.reply_to(msg, f"📄 *दस्तऐवज मिळाला:* `{fname}`\nमजकूर वाचत आहे...", parse_mode="Markdown")
+    status = bot.reply_to(msg, f"📄 *दस्तऐवज मिळाला:* `{fname}`\nसंपूर्ण मजकूर वाचत आहे...", parse_mode="Markdown")
     try:
         file_info = bot.get_file(msg.document.file_id)
         file_bytes = bot.download_file(file_info.file_path)
@@ -471,7 +589,7 @@ def handle_doc(msg):
                 bot.reply_to(msg, "⚠️ PDF वाचण्यासाठी GitHub वरील `requirements.txt` मध्ये `pypdf` असणे आवश्यक आहे.\n\n📸 तोपर्यंत तुम्ही **Word फाईल (.docx)** किंवा **पुस्तकाचा फोटो** पाठवू शकता!")
                 return
             reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-            for page in reader.pages[:15]:
+            for page in reader.pages[:50]:  # Up to 50 pages for large question banks
                 t = page.extract_text()
                 if t:
                     extracted += t + "\n"
@@ -481,8 +599,9 @@ def handle_doc(msg):
             bot.send_message(msg.chat.id, "⚠️ या फाईलमधून मजकूर काढता आले नाही (कदाचित ही स्कॅन केलेली प्रतिमा असावी). कृपया थेट फोटो काढून पाठवा.")
             return
 
-        user_sessions[msg.chat.id] = {"topic": extracted[:5000], "source_type": "doc"}
-        label = f"📄 {fname} (नोट्स)"
+        # Store complete text up to 300,000 characters (supports 100+ questions!)
+        user_sessions[msg.chat.id] = {"topic": extracted[:300000], "source_type": "doc"}
+        label = f"📄 {fname} (संपूर्ण नोट्स)"
         show_format_menu(msg.chat.id, label)
     except Exception as e:
         bot.edit_message_text(f"❌ फाईल वाचताना त्रुटी: {str(e)}", msg.chat.id, status.message_id)
@@ -607,11 +726,9 @@ def publish_in_background(post_id, cid, mid, item):
                 exp = exp[:200]
 
                 raw_q = q['question'].strip()
-                # Check if question is large / multi-statement (e.g. UPSC/Rajyaseva statements)
                 is_large = len(raw_q) > 240 or any(pat in raw_q for pat in ["(अ)", "(ब)", "1.", "2.", "\n"])
 
                 if is_large:
-                    # Part 1: Detailed Question Card with distinct lines
                     formatted_q = format_statements_cleanly(raw_q)
                     card_text = (
                         f"📋 **[प्रश्न {i+1}/{total_q}]**\n"
@@ -626,7 +743,6 @@ def publish_in_background(post_id, cid, mid, item):
                         bot.send_message(target_id, card_text)
                     time.sleep(1.2)
 
-                    # Part 2: Interactive Clickable Quiz Poll attached below
                     poll_q = f"[{i+1}/{total_q}] वरील प्रश्नाचे अचूक उत्तर निवडा:"
                 else:
                     poll_q = f"[{i+1}/{total_q}] {raw_q}" if total_q > 1 else raw_q
@@ -643,7 +759,6 @@ def publish_in_background(post_id, cid, mid, item):
                 if timer_sec:
                     poll_kwargs["open_period"] = timer_sec
 
-                # Flood-control retry loop
                 success = False
                 for attempt in range(3):
                     try:
@@ -665,14 +780,13 @@ def publish_in_background(post_id, cid, mid, item):
                 if not success and posted_count == 0:
                     break
 
-                # Progress update for bulk posts (every 10 questions)
                 if posted_count > 0 and posted_count % 10 == 0 and posted_count < total_q:
                     try:
                         bot.send_message(cid, f"⏳ **प्रगती:** `{posted_count}/{total_q}` प्रश्न `{target_id}` वर पोस्ट झाले आहेत...")
                     except Exception:
                         pass
 
-                time.sleep(2.5)  # Safe Telegram channel pacing (20-24 msgs/min)
+                time.sleep(2.5)
 
             if posted_count == total_q:
                 bot.send_message(cid, f"🎉 **अभिनंदन!** सर्व {posted_count} प्रश्न `{target_id}` चॅनेलवर यशस्वीरीत्या पोस्ट झाले आहेत!")
@@ -775,7 +889,7 @@ def handle_cb(call):
         if val == "custom":
             sess["waiting_custom_cnt"] = mid
             bot.edit_message_text(
-                "👇 **तुम्हाला किती प्रश्न तयार/पोस्ट करायचे आहेत? संख्या टाईप करून पाठवा:**\n*(उदा. 40, 50, 75, 100, 150)*",
+                "👇 **तुम्हाला किती प्रश्न तयार/पोस्ट करायचे आहेत? संख्या टाईप करून पाठवा:**\n*(उदा. 40, 50, 63, 100, 150)*",
                 cid, mid, parse_mode="Markdown"
             )
             return
@@ -992,7 +1106,7 @@ def run_content_generation(cid, mid, sess):
     lang = sess["lang"]
     qmode = sess.get("quiz_source_mode", "ai_gen")
 
-    bot.edit_message_text("⏳ **AI द्वारे प्रक्रिया सुरू आहे...** (अवघे काही सेकंद थांबा)...", cid, mid, parse_mode="Markdown")
+    bot.edit_message_text("⏳ **AI द्वारे प्रक्रिया सुरू आहे...** (मोठ्या संचासाठी १०-१५ सेकंद लागू शकतात)...", cid, mid, parse_mode="Markdown")
     try:
         lang_str = "BILINGUAL (English / Marathi)" if lang == "bilingual" else ("Marathi only" if lang == "marathi" else "English only")
         post_id = str(mid)
@@ -1000,77 +1114,114 @@ def run_content_generation(cid, mid, sess):
         if fmt == "quiz":
             cnt = sess.get("cnt", 1)
             lvl = sess.get("lvl", "combine")
+            all_mcqs = []
 
+            # Strategy A: If As-Is mode, try instant local regex extraction directly from full text first!
             if qmode == "as_is":
-                pattern_instruction = (
-                    "TASK: EXTRACT QUESTIONS AND OPTIONS AS-IS FROM SOURCE MATERIAL.\n"
-                    f"Source Material containing Question Bank / PYQs:\n'''\n{topic}\n'''\n\n"
-                    f"RULES:\n"
-                    f"1. Extract up to {cnt} questions verbatim from the source material without inventing, altering, or rephrasing them.\n"
-                    f"2. Statements MUST be separated by newlines so each appears on its own line.\n"
-                    f"3. Extract the exact question text, the 4 choices, correct answer (0-3), and explanation.\n"
-                )
-            else:
-                if lvl == "upsc":
-                    pattern_instruction = (
-                        "EXAM LEVEL: UPSC Civil Services Examination (CSE) Prelims Standard.\n"
-                        "QUESTION FORMAT (MANDATORY UPSC STYLE):\n"
-                        "- Analytical, multi-statement questions ('Consider the following statements:\\n1. ...\\n\\n2. ...\\n\\nWhich of the statements given above is/are correct?').\n"
-                        "- Statements in the question text MUST be numbered with digits: 1., 2., 3. and separated by newlines!\n"
-                        "- Options MUST be lettered in English: (a) 1 only, (b) 2 only, (c) Both 1 and 2, (d) Neither 1 nor 2 OR (a) Only one, (b) Only two, (c) All three, (d) None.\n"
-                    )
-                elif lvl == "rajyaseva":
-                    pattern_instruction = (
-                        "EXAM LEVEL: MPSC राज्यसेवा (Civil Services) पूर्व परीक्षा Standard.\n"
-                        "QUESTION FORMAT (MANDATORY MPSC RAJYASEVA STYLE):\n"
-                        "- बहुविधानात्मक विश्लेषणात्मक प्रश्न ('खालील विधाने विचारात घ्या:\\n(अ) ...\\n\\n(ब) ...\\n\\n(क) ...\\n\\nवरीलपैकी कोणते/ती विधान/ने योग्य आहे/त?').\n"
-                        "- प्रश्न वाक्यातील विधाने MUST be lettered in Marathi: (अ), (ब), (क), (ड) and separated by newlines!\n"
-                        "- खालील ४ पर्याय MUST be numbered in Marathi digits: १) फक्त (अ), २) (अ) आणि (ब), ३) (ब) आणि (क), ४) वरील सर्व.\n"
-                    )
-                elif lvl == "combine":
-                    pattern_instruction = (
-                        "EXAM LEVEL: MPSC गट ब व गट क संयुक्त (Combine Group B & C) Standard.\n"
-                        "QUESTION FORMAT (MANDATORY MPSC COMBINE STYLE):\n"
-                        "- विधानात्मक + थेट वस्तुनिष्ठ संमिश्र प्रश्न (कलमे, घटनादुरुस्त्या, समित्या, तारखा).\n"
-                        "- विधाने असल्यास (अ), (ब) वापरा आणि ओळी वेगळ्या ठेवा.\n"
-                        "- खालील ४ पर्याय MUST be numbered: १) ..., २) ..., ३) ..., ४) ...\n"
-                    )
-                else: # bharti
-                    pattern_instruction = (
-                        "EXAM LEVEL: पोलीस भरती / तलाठी / सरळसेवा परीक्षा Standard.\n"
-                        "QUESTION FORMAT (MANDATORY BHARTI STYLE):\n"
-                        "- थेट १-ओळी (One-liner) वस्तुनिष्ठ प्रश्न. सोपी व थेट प्रमाण भाषा.\n"
-                        "- खालील ४ पर्याय MUST be numbered: १) ..., २) ..., ३) ..., ४) ...\n"
+                direct_extracted = parse_all_document_mcqs(topic)
+                if len(direct_extracted) >= cnt:
+                    all_mcqs = direct_extracted[:cnt]
+
+            # Strategy B: If not enough questions or AI Generate mode, run safe batched AI calls
+            if len(all_mcqs) < cnt:
+                needed = cnt - len(all_mcqs)
+                batches = get_batch_sizes(needed, max_per_batch=15)
+
+                for b_start, b_end, b_sz in batches:
+                    if len(batches) > 1:
+                        try:
+                            bot.edit_message_text(
+                                f"⏳ **AI द्वारे प्रश्न तयार होत आहेत...** ({len(all_mcqs)}/{cnt} प्रश्न पूर्ण)...",
+                                cid, mid, parse_mode="Markdown"
+                            )
+                        except Exception:
+                            pass
+
+                    if qmode == "as_is":
+                        pattern_instruction = (
+                            "TASK: EXTRACT QUESTIONS AND OPTIONS AS-IS FROM SOURCE MATERIAL.\n"
+                            f"Source Material containing Question Bank / PYQs:\n'''\n{topic[:75000]}\n'''\n\n"
+                            f"RULES:\n"
+                            f"1. Extract exactly questions from index {b_start} to {b_end} (up to {b_sz} questions) verbatim from the source material without inventing, altering, or rephrasing them.\n"
+                            f"2. Statements MUST be separated by newlines so each appears on its own line.\n"
+                            f"3. Extract the exact question text, the 4 choices, correct answer (0-3), and explanation.\n"
+                        )
+                    else:
+                        if lvl == "upsc":
+                            pattern_instruction = (
+                                "EXAM LEVEL: UPSC Civil Services Examination (CSE) Prelims Standard.\n"
+                                "QUESTION FORMAT (MANDATORY UPSC STYLE):\n"
+                                "- Analytical, multi-statement questions ('Consider the following statements:\\n1. ...\\n\\n2. ...\\n\\nWhich of the statements given above is/are correct?').\n"
+                                "- Statements in the question text MUST be numbered with digits: 1., 2., 3. and separated by newlines!\n"
+                                "- Options MUST be lettered in English: (a) 1 only, (b) 2 only, (c) Both 1 and 2, (d) Neither 1 nor 2 OR (a) Only one, (b) Only two, (c) All three, (d) None.\n"
+                            )
+                        elif lvl == "rajyaseva":
+                            pattern_instruction = (
+                                "EXAM LEVEL: MPSC राज्यसेवा (Civil Services) पूर्व परीक्षा Standard.\n"
+                                "QUESTION FORMAT (MANDATORY MPSC RAJYASEVA STYLE):\n"
+                                "- बहुविधानात्मक विश्लेषणात्मक प्रश्न ('खालील विधाने विचारात घ्या:\\n(अ) ...\\n\\n(ब) ...\\n\\n(क) ...\\n\\nवरीलपैकी कोणते/ती विधान/ने योग्य आहे/त?').\n"
+                                "- प्रश्न वाक्यातील विधाने MUST be lettered in Marathi: (अ), (ब), (क), (ड) and separated by newlines!\n"
+                                "- खालील ४ पर्याय MUST be numbered in Marathi digits: १) फक्त (अ), २) (अ) आणि (ब), ३) (ब) आणि (क), ४) वरील सर्व.\n"
+                            )
+                        elif lvl == "combine":
+                            pattern_instruction = (
+                                "EXAM LEVEL: MPSC गट ब व गट क संयुक्त (Combine Group B & C) Standard.\n"
+                                "QUESTION FORMAT (MANDATORY MPSC COMBINE STYLE):\n"
+                                "- विधानात्मक + थेट वस्तुनिष्ठ संमिश्र प्रश्न (कलमे, घटनादुरुस्त्या, समित्या, तारखा).\n"
+                                "- विधाने असल्यास (अ), (ब) वापरा आणि ओळी वेगळ्या ठेवा.\n"
+                                "- खालील ४ पर्याय MUST be numbered: १) ..., २) ..., ३) ..., ४) ...\n"
+                            )
+                        else: # bharti
+                            pattern_instruction = (
+                                "EXAM LEVEL: पोलीस भरती / तलाठी / सरळसेवा परीक्षा Standard.\n"
+                                "QUESTION FORMAT (MANDATORY BHARTI STYLE):\n"
+                                "- थेट १-ओळी (One-liner) वस्तुनिष्ठ प्रश्न. सोपी व थेट प्रमाण भाषा.\n"
+                                "- खालील ४ पर्याय MUST be numbered: १) ..., २) ..., ३) ..., ४) ...\n"
+                            )
+
+                        pattern_instruction += (
+                            f"Subject: {ch_info['sub']}. Language: {lang_str}.\n"
+                            f"Source Material / Notes:\n'''\n{topic[:75000]}\n'''\n\n"
+                            f"Generate exactly {b_sz} high-yield MCQs (Batch {b_start} to {b_end}).\n"
+                        )
+
+                    prompt = (
+                        f"{pattern_instruction}\n"
+                        f"CONSTRAINTS (STRICT FOR TELEGRAM POLLS):\n"
+                        f"1. 'question' can be detailed with statements on separate lines (DO NOT put option letters A/B/C/D inside question).\n"
+                        f"2. exactly 4 'options', each under 90 chars.\n"
+                        f"3. 'correct_option_id' integer 0 to 3.\n"
+                        f"4. 'explanation' max 140 chars.\n"
+                        f"Output MUST be valid JSON in this exact structure:\n"
+                        f"{{\n"
+                        f"  \"questions\": [\n"
+                        f"    {{\n"
+                        f"      \"question\": \"...\",\n"
+                        f"      \"options\": [\"...\", \"...\", \"...\", \"...\"],\n"
+                        f"      \"correct_option_id\": 0,\n"
+                        f"      \"explanation\": \"...\"\n"
+                        f"    }}\n"
+                        f"  ]\n"
+                        f"}}"
                     )
 
-                pattern_instruction += (
-                    f"Subject: {ch_info['sub']}. Language: {lang_str}.\n"
-                    f"Source Material / Notes:\n'''\n{topic}\n'''\n\n"
-                    f"Generate exactly {cnt} high-yield MCQs.\n"
-                )
+                    try:
+                        raw = ask_groq(prompt, json_mode=True)
+                        b_data = parse_json_mcqs(raw)
+                        all_mcqs.extend(b_data)
+                    except Exception as be:
+                        logging.error(f"Batch generation error: {be}")
+                        if not all_mcqs:
+                            raise be
+                        break
 
-            prompt = (
-                f"{pattern_instruction}\n"
-                f"CONSTRAINTS (STRICT FOR TELEGRAM POLLS):\n"
-                f"1. 'question' can be detailed with statements on separate lines (DO NOT put option letters A/B/C/D inside question).\n"
-                f"2. exactly 4 'options', each under 90 chars.\n"
-                f"3. 'correct_option_id' integer 0 to 3.\n"
-                f"4. 'explanation' max 140 chars.\n"
-                f"Output MUST be valid JSON in this exact structure:\n"
-                f"{{\n"
-                f"  \"questions\": [\n"
-                f"    {{\n"
-                f"      \"question\": \"...\",\n"
-                f"      \"options\": [\"...\", \"...\", \"...\", \"...\"],\n"
-                f"      \"correct_option_id\": 0,\n"
-                f"      \"explanation\": \"...\"\n"
-                f"    }}\n"
-                f"  ]\n"
-                f"}}"
-            )
+            raw_data = all_mcqs[:cnt] if all_mcqs else []
+            if not raw_data:
+                raise Exception("दिलेल्या फाईलमधून प्रश्न काढता आले नाहीत.")
 
-            raw = ask_groq(prompt, json_mode=True)
-            data = parse_json_mcqs(raw)
+            # Programmatically standardize numbering for UPSC vs MPSC
+            data = [standardize_mcq_for_exam(q, lvl) for q in raw_data]
+
             pending_posts[post_id] = {
                 "type": "quiz",
                 "channel_id": ch_info["id"],
@@ -1079,12 +1230,12 @@ def run_content_generation(cid, mid, sess):
             }
 
         elif fmt == "mnemonic":
-            prompt = f"Create a memorable MNEMONIC / SHORT TRICK in {lang_str} for subject '{ch_info['sub']}' on topic '{topic}'. Ensure 100% historical accuracy. Use emojis, bold text, clear breakdown."
+            prompt = f"Create a memorable MNEMONIC / SHORT TRICK in {lang_str} for subject '{ch_info['sub']}' on topic '{topic[:30000]}'. Ensure 100% historical accuracy. Use emojis, bold text, clear breakdown."
             text = ask_groq(prompt, json_mode=False)
             pending_posts[post_id] = {"type": "mnemonic", "channel_id": ch_info["id"], "data": text}
 
         else: # notes
-            prompt = f"Create a 1-Minute Quick Revision Note in {lang_str} for '{ch_info['sub']}' on topic '{topic}'. Ensure strict historical accuracy. 4-5 high-yield bullet points with emojis, key articles/facts, and exam traps."
+            prompt = f"Create a 1-Minute Quick Revision Note in {lang_str} for '{ch_info['sub']}' on topic '{topic[:30000]}'. Ensure strict historical accuracy. 4-5 high-yield bullet points with emojis, key articles/facts, and exam traps."
             text = ask_groq(prompt, json_mode=False)
             pending_posts[post_id] = {"type": "notes", "channel_id": ch_info["id"], "data": text}
 
@@ -1118,7 +1269,7 @@ def render_preview_message(cid, mid, post_id, sess):
             if len(preview) + len(q_text) < 3800:
                 preview += q_text
             else:
-                preview += f"*(...आणि इतर {len(data) - idx} प्रश्न थेट चॅनेलवर पोस्ट होतील)*\n"
+                preview += f"*(...आणि उर्वरित {len(data) - idx} प्रश्न थेट चॅनेलवर पोस्ट होतील)*\n"
                 break
     elif fmt == "mnemonic":
         preview = f"📋 *Mnemonic Preview*\n🎯 *Target:* `{ch_info['id']}`\n\n{item['data']}"
