@@ -1,27 +1,26 @@
 """
-Sidhu Sir's Ultimate Multi-Channel AI Bot (UPSC/MPSC Exact Numbering + As-Is PYQ Extractor + Question Hub)
-=============================================================================================================
+Sidhu Sir's Ultimate Multi-Channel AI Bot (Two-Part UPSC/MPSC Cards + Distinct Line Statements)
+================================================================================================
 Features:
-1. Exact Exam Numbering & Structure:
-   - 🏛️ UPSC: Statements 1., 2., 3. | Options (a), (b), (c), (d) | Analytical & Multi-statement
-   - 🚩 MPSC राज्यसेवा: Statements (अ), (ब), (क) | Options १), २), ३), ४) | बहुविधानात्मक
-   - 🎯 MPSC Combine: Statements (अ), (ब) | Options १), २), ३), ४) | कलमे, दुरुस्त्या, समित्या
-   - 👮 पोलीस भरती: Direct 1-liner | Options १), २), ३), ४)
-2. 📑 As-Is PYQ Extraction vs 🤖 AI Generate:
-   - Choice to extract existing Question Bank / PYQ questions verbatim without AI alteration
-   - OR let AI generate brand-new exam questions from notes.
-3. 🛠️ Question Management & Editing Hub:
-   - Edit Question sentence
-   - Edit Options individually (A, B, C, D)
-   - Change Correct Answer with 1 tap (A/B/C/D)
-   - Edit Explanation
-   - 🗑️ Delete/Cancel any particular question from the quiz
-   - Flexible 'X -> Y' or 'D: option' text replacements
-4. 📋 Full Question Preview (Displays ALL generated questions before posting).
-5. 🔙 Universal Back button navigation on EVERY step.
-6. ♾️ Normal Quiz (Permanent open) vs ⏱️ Live Test (45s Timer).
-7. 🛡️ Active 2026 Groq Models (openai/gpt-oss-20b & qwen/qwen3.8-27b) with Native JSON Mode.
-8. 🔁 Rock-solid infinite polling that never drops /start messages!
+1. 🏛️ Two-Part Card + Poll Strategy for UPSC & MPSC Rajyaseva:
+   - For long / analytical questions (> 250 chars or multi-statement questions):
+     Part 1: Beautiful Rich Text Question Card with statements clearly separated ONE BELOW THE OTHER.
+     Part 2: Clickable Native Telegram Quiz Poll immediately below with authentic options & confetti!
+   - For short 1-liner questions: Posts directly as native quiz poll.
+2. 📑 Distinct Statement Formatting:
+   - Statements (अ), (ब), (क) and 1., 2., 3. are NEVER run-on or continuous.
+   - Automatically formatted with double line breaks for maximum readability.
+3. 🎯 UPSC vs MPSC Exact Numbering:
+   - UPSC: Statements 1., 2., 3. | Options (a), (b), (c), (d)
+   - MPSC राज्यसेवा: Statements (अ), (ब), (क) | Options १), २), ३), ४)
+   - MPSC Combine: Statements (अ), (ब) | Options १), २), ३), ४)
+   - पोलीस भरती: Direct 1-liner | Options १), २), ३), ४)
+4. 🚀 Bulk Question Support (50, 100, or Custom Count up to 200) with Live Progress Tracker.
+5. ⚡ Non-blocking Asynchronous Background Posting (Never freezes /start or uploads).
+6. 📑 As-Is PYQ Extraction vs 🤖 AI Generate choice.
+7. 🛠️ Question Management & Individual Option Editor Hub.
+8. 🔙 Universal Back button navigation on EVERY step.
+9. ♾️ Normal Quiz (Permanent open) vs ⏱️ Live Test (45s Timer).
 """
 
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -161,12 +160,14 @@ def ask_groq(prompt: str, json_mode: bool = False) -> str:
         "   - Satyashodhak Samaj: Mahatma Jyotirao Phule (1873).\n"
         "   - Rajarshi Chhatrapati Shahu Maharaj: Kolhapur 50% reservation (1902), primary education act (1917), Satya Shodhak support, Vedokta.\n"
         "   - Salt Satyagraha / Dandi March (1930), Champaran (1917), Kheda (1918), Non-Cooperation (1920), Quit India (1942) are Mahatma Gandhi.\n"
-        "4. Strict Separation of Question & Options:\n"
+        "4. Strict Statement Formatting (One below the other):\n"
+        "   - Statements in multi-statement questions MUST be separated by a clean newline so each statement appears on its own line one below the other!\n"
+        "   - NEVER write statements continuously on the same line (e.g. NEVER write '1. ... 2. ...' on one line).\n"
+        "5. Separation of Question & Options:\n"
         "   - NEVER include option labels (A), (B), (C), (D) or option values inside the question text itself!\n"
-        "   - The 'question' field MUST ONLY contain the question sentence.\n"
+        "   - The 'question' field MUST contain only the question sentence and statements.\n"
         "   - The 'options' list MUST contain the 4 distinct choices.\n"
-        "5. Length limits (Mandatory for Telegram):\n"
-        "   - 'question' max 280 characters.\n"
+        "6. Length limits:\n"
         "   - each option under 90 characters.\n"
         "   - 'explanation' under 140 characters.\n"
     )
@@ -180,13 +181,13 @@ def ask_groq(prompt: str, json_mode: bool = False) -> str:
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.2,
-            "max_tokens": 2048
+            "max_tokens": 4096
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
 
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=35)
+            resp = requests.post(url, headers=headers, json=payload, timeout=45)
             if resp.status_code == 200:
                 content = resp.json()["choices"][0]["message"]["content"]
                 if content and content.strip():
@@ -201,6 +202,16 @@ def ask_groq(prompt: str, json_mode: bool = False) -> str:
 
     raise Exception(last_error or "AI Generation failed.")
 
+def format_statements_cleanly(text: str) -> str:
+    """Formats statements (अ, ब, क or 1, 2, 3) cleanly one below the other with spacing."""
+    t = text.strip()
+    t = re.sub(r"\s*(\([अ-हa-dA-D]\))\s*", r"\n\n\1 ", t)
+    t = re.sub(r"\s*(\b[1-4]\.)\s*", r"\n\n\1 ", t)
+    t = re.sub(r"\s*(Statement[- ][I|V|X\d]+[:\.])\s*", r"\n\n\1 ", t, flags=re.IGNORECASE)
+    t = re.sub(r"\s*(खालीलपैकी|Which of the statements|वरीलपैकी|Select the correct)\s*", r"\n\n\1 ", t)
+    t = re.sub(r"\n{3,}", "\n\n", t).strip()
+    return t
+
 def parse_plain_text_mcqs(text: str) -> list:
     mcqs = []
     blocks = re.split(r"(?:\n\s*|\A)(?:Q\s*\d+[\.:]|\d+[\.:])\s*", text)
@@ -208,11 +219,11 @@ def parse_plain_text_mcqs(text: str) -> list:
         b = b.strip()
         if not b:
             continue
-        opts = re.findall(r"(?:[A-Da-d][\.\)]|[\(][A-Da-d][\)]|[१-४][\.\)])\s*(.+?)(?=(?:[A-Da-d][\.\)]|[\(][A-Da-d][\)]|[१-४][\.\)]|उत्तर|Ans|Explanation|स्पष्टीकरण|\Z))", b, re.DOTALL)
+        opts = re.findall(r"(?:[A-Da-d][\.\)]|[\(][A-Da-d][\)]|[१-४1-4][\.\)])\s*(.+?)(?=(?:[A-Da-d][\.\)]|[\(][A-Da-d][\)]|[१-४1-4][\.\)]|उत्तर|Ans|Explanation|स्पष्टीकरण|\Z))", b, re.DOTALL)
         if len(opts) >= 4:
             q_lines = b.split("\n")[0].strip()
             clean_opts = [o.strip()[:90] for o in opts[:4]]
-            ans_match = re.search(r"(?:उत्तर|Ans|Correct)\s*[:\-]?\s*([A-Da-d१-४])", b)
+            ans_match = re.search(r"(?:उत्तर|Ans|Correct)\s*[:\-]?\s*([A-Da-d१-४1-4])", b)
             corr_idx = 0
             if ans_match:
                 ch = ans_match.group(1)
@@ -225,7 +236,7 @@ def parse_plain_text_mcqs(text: str) -> list:
             exp_match = re.search(r"(?:स्पष्टीकरण|Explanation)\s*[:\-]?\s*(.+)", b, re.DOTALL)
             exp = exp_match.group(1).strip()[:140] if exp_match else "संदर्भ नोट्सनुसार अचूक उत्तर."
             mcqs.append({
-                "question": q_lines[:280],
+                "question": q_lines,
                 "options": clean_opts,
                 "correct_option_id": corr_idx if 0 <= corr_idx <= 3 else 0,
                 "explanation": exp
@@ -284,7 +295,7 @@ def parse_json_mcqs(text: str) -> list:
 # ------------------------------------------------------------------------------
 @bot.message_handler(commands=['start', 'help'])
 def start_cmd(msg):
-    user_sessions[msg.chat.id] = {}  # Reset previous state cleanly
+    user_sessions[msg.chat.id] = {}  # Clean reset on /start
     text = (
         "🚀 *Sidhu Sir's Ultimate Quiz & Content Bot Active!*\n\n"
         "✨ **तुम्ही काय पाठवू शकता?**\n"
@@ -296,7 +307,7 @@ def start_cmd(msg):
     )
     bot.send_message(msg.chat.id, text, parse_mode="Markdown")
 
-# 1. Text Input & Advanced Question / Option Edit Handler
+# 1. Text Input, Custom Count & Advanced Option Edit Handler
 @bot.message_handler(func=lambda m: True, content_types=['text'])
 def handle_text(msg):
     topic = msg.text.strip()
@@ -304,6 +315,23 @@ def handle_text(msg):
         return
 
     sess = user_sessions.get(msg.chat.id, {})
+
+    # Check if user is typing custom question count
+    if "waiting_custom_cnt" in sess:
+        mid = sess.pop("waiting_custom_cnt")
+        digits = re.findall(r"\d+", topic)
+        if digits:
+            val = int(digits[0])
+            val = max(1, min(val, 200))
+            sess["cnt"] = val
+            bot.reply_to(msg, f"🎯 **प्रश्नांची संख्या निश्चित केली:** `{val} प्रश्न`")
+            show_timer_menu(msg.chat.id, mid)
+            return
+        else:
+            bot.reply_to(msg, "कृपया योग्य संख्या टाईप करा (उदा. 40, 75, 100).")
+            return
+
+    # Check if user is editing a question
     if "editing" in sess:
         edit_info = sess.pop("editing")
         post_id = edit_info["post_id"]
@@ -317,35 +345,33 @@ def handle_text(msg):
                 q_item = quizzes[q_idx]
 
                 if target == "q":
-                    q_item["question"] = topic[:280]
+                    q_item["question"] = topic
                     bot.reply_to(msg, f"✅ **Q{q_idx+1} चा प्रश्न बदलला!**", parse_mode="Markdown")
                 elif target == "opt0":
                     q_item["options"][0] = topic[:90]
-                    bot.reply_to(msg, f"✅ **Q{q_idx+1} चा पर्याय १/A बदलला:** `{topic[:90]}`", parse_mode="Markdown")
+                    bot.reply_to(msg, f"✅ **Q{q_idx+1} चा पर्याय १ बदलला:** `{topic[:90]}`", parse_mode="Markdown")
                 elif target == "opt1":
                     q_item["options"][1] = topic[:90]
-                    bot.reply_to(msg, f"✅ **Q{q_idx+1} चा पर्याय २/B बदलला:** `{topic[:90]}`", parse_mode="Markdown")
+                    bot.reply_to(msg, f"✅ **Q{q_idx+1} चा पर्याय २ बदलला:** `{topic[:90]}`", parse_mode="Markdown")
                 elif target == "opt2":
                     q_item["options"][2] = topic[:90]
-                    bot.reply_to(msg, f"✅ **Q{q_idx+1} चा पर्याय ३/C बदलला:** `{topic[:90]}`", parse_mode="Markdown")
+                    bot.reply_to(msg, f"✅ **Q{q_idx+1} चा पर्याय ३ बदलला:** `{topic[:90]}`", parse_mode="Markdown")
                 elif target == "opt3":
                     q_item["options"][3] = topic[:90]
-                    bot.reply_to(msg, f"✅ **Q{q_idx+1} चा पर्याय ४/D बदलला:** `{topic[:90]}`", parse_mode="Markdown")
+                    bot.reply_to(msg, f"✅ **Q{q_idx+1} चा पर्याय ४ बदलला:** `{topic[:90]}`", parse_mode="Markdown")
                 elif target == "exp":
                     q_item["explanation"] = topic[:140]
                     bot.reply_to(msg, f"✅ **Q{q_idx+1} चे स्पष्टीकरण बदलले!**", parse_mode="Markdown")
                 else:
-                    # Arrow replace: X -> Y
                     arrow_match = re.search(r"^(?:(?:बदला|replace)\s*:\s*)?(.+?)\s*(?:->|=>|–>|ते|म्हणजे)\s*(.+)$", topic, re.IGNORECASE)
                     if arrow_match:
                         old_w = arrow_match.group(1).strip()
                         new_w = arrow_match.group(2).strip()
-                        q_item["question"] = q_item["question"].replace(old_w, new_w)[:280]
+                        q_item["question"] = q_item["question"].replace(old_w, new_w)
                         q_item["explanation"] = q_item["explanation"].replace(old_w, new_w)[:140]
                         q_item["options"] = [opt.replace(old_w, new_w)[:90] for opt in q_item["options"]]
                         bot.reply_to(msg, f"✅ **बदल यशस्वी!**\n`{old_w}` ➔ `{new_w}`", parse_mode="Markdown")
                     else:
-                        # Option pattern: A: ... or 1: ...
                         opt_match = re.match(r"^([A-Da-d१-४1-4])\s*[\.:\)]\s*(.+)$", topic)
                         if opt_match:
                             opt_char = opt_match.group(1)
@@ -359,7 +385,7 @@ def handle_text(msg):
                             q_item["options"][opt_i] = opt_val
                             bot.reply_to(msg, f"✅ **Q{q_idx+1} चा पर्याय {opt_char} बदलला:** `{opt_val}`", parse_mode="Markdown")
                         else:
-                            q_item["question"] = topic[:280]
+                            q_item["question"] = topic
                             bot.reply_to(msg, f"✅ **Q{q_idx+1} चा प्रश्न बदलला!**", parse_mode="Markdown")
 
                 show_question_edit_menu(msg.chat.id, mid, post_id, q_idx)
@@ -445,7 +471,7 @@ def handle_doc(msg):
                 bot.reply_to(msg, "⚠️ PDF वाचण्यासाठी GitHub वरील `requirements.txt` मध्ये `pypdf` असणे आवश्यक आहे.\n\n📸 तोपर्यंत तुम्ही **Word फाईल (.docx)** किंवा **पुस्तकाचा फोटो** पाठवू शकता!")
                 return
             reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-            for page in reader.pages[:10]:
+            for page in reader.pages[:15]:
                 t = page.extract_text()
                 if t:
                     extracted += t + "\n"
@@ -455,7 +481,7 @@ def handle_doc(msg):
             bot.send_message(msg.chat.id, "⚠️ या फाईलमधून मजकूर काढता आले नाही (कदाचित ही स्कॅन केलेली प्रतिमा असावी). कृपया थेट फोटो काढून पाठवा.")
             return
 
-        user_sessions[msg.chat.id] = {"topic": extracted[:3000], "source_type": "doc"}
+        user_sessions[msg.chat.id] = {"topic": extracted[:5000], "source_type": "doc"}
         label = f"📄 {fname} (नोट्स)"
         show_format_menu(msg.chat.id, label)
     except Exception as e:
@@ -503,9 +529,10 @@ def show_question_edit_menu(cid, mid, post_id, q_idx):
 
     q_item = quizzes[q_idx]
     corr_char = chr(65 + q_item["correct_option_id"])
+    formatted_q = format_statements_cleanly(q_item['question'])
     text = (
         f"🛠️ **प्रश्न Q{q_idx+1} व्यवस्थापन (Question Editor):**\n\n"
-        f"📌 *प्रश्न:* {q_item['question']}\n\n"
+        f"📌 *प्रश्न:*\n{formatted_q}\n\n"
         f"1️⃣ {q_item['options'][0]}\n"
         f"2️⃣ {q_item['options'][1]}\n"
         f"3️⃣ {q_item['options'][2]}\n"
@@ -559,8 +586,125 @@ def show_answer_select_menu(cid, mid, post_id, q_idx):
     bot.edit_message_text(text, cid, mid, reply_markup=markup, parse_mode="Markdown")
 
 # ------------------------------------------------------------------------------
-# 5. STEP-BY-STEP FLOW WITH BACK BUTTONS ON EVERY STEP
+# 5. STEP-BY-STEP FLOW WITH ASYNC BACKGROUND PUBLISHING & TWO-PART CARDS
 # ------------------------------------------------------------------------------
+def publish_in_background(post_id, cid, mid, item):
+    """Executes posting with Two-Part Cards for large questions and native polls for short ones."""
+    target_id = item["channel_id"]
+    try:
+        if item["type"] == "quiz":
+            quizzes = item["data"]
+            total_q = len(quizzes)
+            timer_sec = item.get("timer")
+            brand = "\n\n🎯 Join: @sidhu_sir_official"
+            posted_count = 0
+            last_err = ""
+
+            for i, q in enumerate(quizzes):
+                exp = q.get("explanation", "")
+                if len(exp) + len(brand) <= 200:
+                    exp += brand
+                exp = exp[:200]
+
+                raw_q = q['question'].strip()
+                # Check if question is large / multi-statement (e.g. UPSC/Rajyaseva statements)
+                is_large = len(raw_q) > 240 or any(pat in raw_q for pat in ["(अ)", "(ब)", "1.", "2.", "\n"])
+
+                if is_large:
+                    # Part 1: Detailed Question Card with distinct lines
+                    formatted_q = format_statements_cleanly(raw_q)
+                    card_text = (
+                        f"📋 **[प्रश्न {i+1}/{total_q}]**\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"{formatted_q}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"👇 **खालील पोलमध्ये अचूक पर्याय निवडा:**"
+                    )
+                    try:
+                        bot.send_message(target_id, card_text, parse_mode="Markdown")
+                    except Exception:
+                        bot.send_message(target_id, card_text)
+                    time.sleep(1.2)
+
+                    # Part 2: Interactive Clickable Quiz Poll attached below
+                    poll_q = f"[{i+1}/{total_q}] वरील प्रश्नाचे अचूक उत्तर निवडा:"
+                else:
+                    poll_q = f"[{i+1}/{total_q}] {raw_q}" if total_q > 1 else raw_q
+
+                poll_kwargs = {
+                    "chat_id": target_id,
+                    "question": poll_q[:300],
+                    "options": [opt[:100] for opt in q["options"][:4]],
+                    "type": "quiz",
+                    "correct_option_id": q["correct_option_id"] if 0 <= q["correct_option_id"] <= 3 else 0,
+                    "explanation": exp,
+                    "is_anonymous": True
+                }
+                if timer_sec:
+                    poll_kwargs["open_period"] = timer_sec
+
+                # Flood-control retry loop
+                success = False
+                for attempt in range(3):
+                    try:
+                        bot.send_poll(**poll_kwargs)
+                        posted_count += 1
+                        success = True
+                        break
+                    except telebot.apihelper.ApiTelegramException as e:
+                        last_err = str(e)
+                        if getattr(e, 'error_code', None) == 429:
+                            wait_t = getattr(e, 'retry_after', 10) or 10
+                            time.sleep(wait_t + 1)
+                        else:
+                            break
+                    except Exception as e:
+                        last_err = str(e)
+                        break
+
+                if not success and posted_count == 0:
+                    break
+
+                # Progress update for bulk posts (every 10 questions)
+                if posted_count > 0 and posted_count % 10 == 0 and posted_count < total_q:
+                    try:
+                        bot.send_message(cid, f"⏳ **प्रगती:** `{posted_count}/{total_q}` प्रश्न `{target_id}` वर पोस्ट झाले आहेत...")
+                    except Exception:
+                        pass
+
+                time.sleep(2.5)  # Safe Telegram channel pacing (20-24 msgs/min)
+
+            if posted_count == total_q:
+                bot.send_message(cid, f"🎉 **अभिनंदन!** सर्व {posted_count} प्रश्न `{target_id}` चॅनेलवर यशस्वीरीत्या पोस्ट झाले आहेत!")
+            elif posted_count > 0:
+                bot.send_message(cid, f"⚠️ **अर्धवट पोस्टिंग:** {total_q} पैकी {posted_count} प्रश्न पोस्ट झाले.\nत्रुटी: `{last_err}`")
+            else:
+                bot.send_message(
+                    cid,
+                    f"❌ **प्रश्न `{target_id}` चॅनेलवर पोस्ट होऊ शकले नाहीत!**\n\n"
+                    f"📌 **टेलिग्राम त्रुटी:** `{last_err}`\n\n"
+                    f"💡 **कृपया तपासा:**\n"
+                    f"१. बॉट (`@SIDHUSIR_QUIZBOT`) हा `{target_id}` चॅनेलचा **Administrator (Admin)** आहे का?\n"
+                    f"२. बॉटला **'Post Messages'** ची परवानगी दिली आहे का?"
+                )
+        else:
+            content = item["data"] + "\n\n━━━━━━━━━━━━━━━\n📢 **अधिक तयारीसाठी जॉईन करा:** @sidhu_sir_official"
+            try:
+                bot.send_message(target_id, content, parse_mode="Markdown")
+                bot.send_message(cid, f"🎉 **अभिनंदन!** मजकूर `{target_id}` चॅनेलवर यशस्वीरीत्या पोस्ट झाला आहे!")
+            except Exception as e:
+                bot.send_message(
+                    cid,
+                    f"❌ **चॅनेलवर पोस्ट करता आले नाही:** `{e}`\n\n"
+                    f"बॉट `{target_id}` चा Admin आहे का ते तपासा."
+                )
+
+    except Exception as e:
+        bot.send_message(cid, f"❌ पोस्टिंग प्रक्रिया त्रुटी: {str(e)}")
+    finally:
+        if post_id in pending_posts:
+            del pending_posts[post_id]
+
 @bot.callback_query_handler(func=lambda call: True)
 def handle_cb(call):
     cid = call.message.chat.id
@@ -627,7 +771,16 @@ def handle_cb(call):
 
     # Step 5: Count Chosen -> Choose Mode (Normal vs Live Timer)
     elif call.data.startswith("cnt_"):
-        sess["cnt"] = int(call.data.replace("cnt_", ""))
+        val = call.data.replace("cnt_", "")
+        if val == "custom":
+            sess["waiting_custom_cnt"] = mid
+            bot.edit_message_text(
+                "👇 **तुम्हाला किती प्रश्न तयार/पोस्ट करायचे आहेत? संख्या टाईप करून पाठवा:**\n*(उदा. 40, 50, 75, 100, 150)*",
+                cid, mid, parse_mode="Markdown"
+            )
+            return
+
+        sess["cnt"] = int(val)
         show_timer_menu(cid, mid)
 
     elif call.data == "back_to_cnt":
@@ -651,7 +804,7 @@ def handle_cb(call):
 
         quizzes = pending_posts[post_id]["data"]
         markup = types.InlineKeyboardMarkup(row_width=2)
-        for idx in range(len(quizzes)):
+        for idx in range(min(len(quizzes), 25)):
             markup.add(types.InlineKeyboardButton(f"🛠️ Q{idx+1} एडिट / पर्याय / डिलीट", callback_data=f"do_edit_{post_id}_{idx}"))
         markup.add(types.InlineKeyboardButton("🔙 प्रिव्ह्यूवर परत जा (Back)", callback_data=f"back_to_prev_{post_id}"))
         bot.edit_message_text("👇 **कोणत्या प्रश्नाचे व्यवस्थापन करायचे आहे? निवडा:**", cid, mid, reply_markup=markup, parse_mode="Markdown")
@@ -746,57 +899,19 @@ def handle_cb(call):
             del sess["editing"]
         render_preview_message(cid, mid, post_id, sess)
 
-    # Step 7: Publish to Target Channel
+    # Step 7: Publish to Target Channel (Non-blocking Asynchronous Background Thread)
     elif call.data.startswith("pub_"):
         post_id = call.data.replace("pub_", "")
         if post_id not in pending_posts:
             bot.answer_callback_query(call.id, "कालबाह्य झाले आहे.")
             return
 
-        bot.answer_callback_query(call.id, "🚀 चॅनलवर पोस्ट होत आहे...")
+        bot.answer_callback_query(call.id, "🚀 चॅनलवर पोस्टिंग सुरू केले आहे...")
         item = pending_posts[post_id]
         target_id = item["channel_id"]
-        bot.edit_message_text(f"🚀 `{target_id}` वर पोस्ट होत आहे...", cid, mid, parse_mode="Markdown")
+        bot.edit_message_text(f"🚀 `{target_id}` वर पोस्टिंग सुरू झाले आहे...", cid, mid, parse_mode="Markdown")
 
-        if item["type"] == "quiz":
-            quizzes = item["data"]
-            timer_sec = item.get("timer")
-            brand = "\n\n🎯 Join: @sidhu_sir_official"
-
-            for i, q in enumerate(quizzes):
-                exp = q.get("explanation", "")
-                if len(exp) + len(brand) <= 200:
-                    exp += brand
-                exp = exp[:200]
-
-                # Ensure strict telegram limits: question <= 300, options <= 100
-                q_text = f"[{i+1}/{len(quizzes)}] {q['question']}" if len(quizzes) > 1 else q['question']
-                poll_kwargs = {
-                    "chat_id": target_id,
-                    "question": q_text[:300],
-                    "options": [opt[:100] for opt in q["options"][:4]],
-                    "type": "quiz",
-                    "correct_option_id": q["correct_option_id"] if 0 <= q["correct_option_id"] <= 3 else 0,
-                    "explanation": exp,
-                    "is_anonymous": True
-                }
-                if timer_sec:
-                    poll_kwargs["open_period"] = timer_sec
-
-                try:
-                    bot.send_poll(**poll_kwargs)
-                except Exception as e:
-                    logging.error(f"Poll send error on Q{i+1}: {e}")
-                time.sleep(2.0)
-        else:
-            content = item["data"] + "\n\n━━━━━━━━━━━━━━━\n📢 **अधिक तयारीसाठी जॉईन करा:** @sidhu_sir_official"
-            try:
-                bot.send_message(target_id, content, parse_mode="Markdown")
-            except Exception as e:
-                logging.error(f"Message send error: {e}")
-
-        bot.send_message(cid, f"🎉 **अभिनंदन!** कन्टेन्ट `{target_id}` चॅनेलवर यशस्वीरीत्या पोस्ट झाला आहे!")
-        del pending_posts[post_id]
+        threading.Thread(target=publish_in_background, args=(post_id, cid, mid, item), daemon=True).start()
 
     elif call.data == "can_":
         bot.edit_message_text("❌ रद्द करण्यात आले.", cid, mid)
@@ -853,8 +968,13 @@ def show_count_menu(cid, mid):
         types.InlineKeyboardButton("🏆 १० प्रश्न", callback_data="cnt_10"),
         types.InlineKeyboardButton("🚀 २५ प्रश्न", callback_data="cnt_25")
     )
+    markup.add(
+        types.InlineKeyboardButton("🎯 ५० प्रश्न", callback_data="cnt_50"),
+        types.InlineKeyboardButton("💯 १०० प्रश्न", callback_data="cnt_100")
+    )
+    markup.add(types.InlineKeyboardButton("✍️ स्वतः संख्या टाका (Custom Count)", callback_data="cnt_custom"))
     markup.add(types.InlineKeyboardButton("🔙 मागे जा (Back)", callback_data="back_to_cnt"))
-    bot.edit_message_text("👇 **किती प्रश्न तयार करायचे आहेत?**", cid, mid, reply_markup=markup, parse_mode="Markdown")
+    bot.edit_message_text("👇 **किती प्रश्न तयार / पोस्ट करायचे आहेत?**", cid, mid, reply_markup=markup, parse_mode="Markdown")
 
 def show_timer_menu(cid, mid):
     markup = types.InlineKeyboardMarkup(row_width=1)
@@ -872,7 +992,7 @@ def run_content_generation(cid, mid, sess):
     lang = sess["lang"]
     qmode = sess.get("quiz_source_mode", "ai_gen")
 
-    bot.edit_message_text("⏳ **AI द्वारे प्रक्रिया सुरू आहे...** (अवघे १-२ सेकंद थांबा)...", cid, mid, parse_mode="Markdown")
+    bot.edit_message_text("⏳ **AI द्वारे प्रक्रिया सुरू आहे...** (अवघे काही सेकंद थांबा)...", cid, mid, parse_mode="Markdown")
     try:
         lang_str = "BILINGUAL (English / Marathi)" if lang == "bilingual" else ("Marathi only" if lang == "marathi" else "English only")
         post_id = str(mid)
@@ -881,30 +1001,30 @@ def run_content_generation(cid, mid, sess):
             cnt = sess.get("cnt", 1)
             lvl = sess.get("lvl", "combine")
 
-            # Determine specific Exam Pattern and Numbering
             if qmode == "as_is":
                 pattern_instruction = (
                     "TASK: EXTRACT QUESTIONS AND OPTIONS AS-IS FROM SOURCE MATERIAL.\n"
                     f"Source Material containing Question Bank / PYQs:\n'''\n{topic}\n'''\n\n"
                     f"RULES:\n"
-                    f"1. Extract exactly up to {cnt} questions verbatim from the source material without inventing, altering, or rephrasing them.\n"
-                    f"2. Extract the exact question text, the 4 choices, correct answer (0-3), and explanation.\n"
+                    f"1. Extract up to {cnt} questions verbatim from the source material without inventing, altering, or rephrasing them.\n"
+                    f"2. Statements MUST be separated by newlines so each appears on its own line.\n"
+                    f"3. Extract the exact question text, the 4 choices, correct answer (0-3), and explanation.\n"
                 )
             else:
                 if lvl == "upsc":
                     pattern_instruction = (
                         "EXAM LEVEL: UPSC Civil Services Examination (CSE) Prelims Standard.\n"
                         "QUESTION FORMAT (MANDATORY UPSC STYLE):\n"
-                        "- Analytical, multi-statement questions ('Consider the following statements:\\n1. ...\\n2. ...\\nWhich of the statements given above is/are correct?').\n"
-                        "- Statements in the question text MUST be numbered with digits: 1., 2., 3.\n"
+                        "- Analytical, multi-statement questions ('Consider the following statements:\\n1. ...\\n\\n2. ...\\n\\nWhich of the statements given above is/are correct?').\n"
+                        "- Statements in the question text MUST be numbered with digits: 1., 2., 3. and separated by newlines!\n"
                         "- Options MUST be lettered in English: (a) 1 only, (b) 2 only, (c) Both 1 and 2, (d) Neither 1 nor 2 OR (a) Only one, (b) Only two, (c) All three, (d) None.\n"
                     )
                 elif lvl == "rajyaseva":
                     pattern_instruction = (
                         "EXAM LEVEL: MPSC राज्यसेवा (Civil Services) पूर्व परीक्षा Standard.\n"
                         "QUESTION FORMAT (MANDATORY MPSC RAJYASEVA STYLE):\n"
-                        "- बहुविधानात्मक विश्लेषणात्मक प्रश्न ('खालील विधाने विचारात घ्या:\\n(अ) ...\\n(ब) ...\\n(क) ...\\nवरीलपैकी कोणते/ती विधान/ने योग्य आहे/त?').\n"
-                        "- प्रश्न वाक्यातील विधाने MUST be lettered in Marathi: (अ), (ब), (क), (ड).\n"
+                        "- बहुविधानात्मक विश्लेषणात्मक प्रश्न ('खालील विधाने विचारात घ्या:\\n(अ) ...\\n\\n(ब) ...\\n\\n(क) ...\\n\\nवरीलपैकी कोणते/ती विधान/ने योग्य आहे/त?').\n"
+                        "- प्रश्न वाक्यातील विधाने MUST be lettered in Marathi: (अ), (ब), (क), (ड) and separated by newlines!\n"
                         "- खालील ४ पर्याय MUST be numbered in Marathi digits: १) फक्त (अ), २) (अ) आणि (ब), ३) (ब) आणि (क), ४) वरील सर्व.\n"
                     )
                 elif lvl == "combine":
@@ -912,7 +1032,7 @@ def run_content_generation(cid, mid, sess):
                         "EXAM LEVEL: MPSC गट ब व गट क संयुक्त (Combine Group B & C) Standard.\n"
                         "QUESTION FORMAT (MANDATORY MPSC COMBINE STYLE):\n"
                         "- विधानात्मक + थेट वस्तुनिष्ठ संमिश्र प्रश्न (कलमे, घटनादुरुस्त्या, समित्या, तारखा).\n"
-                        "- विधाने असल्यास (अ), (ब) वापरा.\n"
+                        "- विधाने असल्यास (अ), (ब) वापरा आणि ओळी वेगळ्या ठेवा.\n"
                         "- खालील ४ पर्याय MUST be numbered: १) ..., २) ..., ३) ..., ४) ...\n"
                     )
                 else: # bharti
@@ -932,7 +1052,7 @@ def run_content_generation(cid, mid, sess):
             prompt = (
                 f"{pattern_instruction}\n"
                 f"CONSTRAINTS (STRICT FOR TELEGRAM POLLS):\n"
-                f"1. 'question' max 280 chars (DO NOT put option letters A/B/C/D inside question).\n"
+                f"1. 'question' can be detailed with statements on separate lines (DO NOT put option letters A/B/C/D inside question).\n"
                 f"2. exactly 4 'options', each under 90 chars.\n"
                 f"3. 'correct_option_id' integer 0 to 3.\n"
                 f"4. 'explanation' max 140 chars.\n"
@@ -989,7 +1109,8 @@ def render_preview_message(cid, mid, post_id, sess):
             f"━━━━━━━━━━━━━━━━━━━\n\n"
         )
         for idx, q in enumerate(data):
-            q_text = f"*Q{idx+1}: {q['question']}*\n"
+            fmt_q = format_statements_cleanly(q['question'])
+            q_text = f"*Q{idx+1}:*\n{fmt_q}\n\n"
             for i, o in enumerate(q['options']):
                 q_text += f"{'✅' if i == q['correct_option_id'] else '⚪'} {o}\n"
             q_text += f"💡 *Exp:* {q['explanation']}\n\n"
@@ -1019,8 +1140,13 @@ def render_preview_message(cid, mid, post_id, sess):
         bot.send_message(cid, preview, reply_markup=markup, parse_mode="Markdown")
 
 # ------------------------------------------------------------------------------
-# 6. RUN BOT (CLEAN INFINITY POLLING - ZERO DROPPED MESSAGES)
+# 6. RUN BOT (CLEAN INFINITY POLLING WITH AUTO-RESTART)
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     print("🚀 Sidhu Sir's Bot is online 24/7!")
-    bot.infinity_polling(timeout=20, long_polling_timeout=10)
+    while True:
+        try:
+            bot.infinity_polling(timeout=20, long_polling_timeout=10, logger_level=logging.INFO)
+        except Exception as e:
+            logging.error(f"Polling loop restart after error: {e}")
+            time.sleep(3)
