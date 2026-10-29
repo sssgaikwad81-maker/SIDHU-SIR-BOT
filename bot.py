@@ -41,7 +41,7 @@ threading.Thread(target=start_health_server, daemon=True).start()
 # 1. CONFIGURATION (Verified Credentials)
 # ==============================================================================
 TELEGRAM_BOT_TOKEN = "9253804253:AAG3NaTU704bmw00hznomU1NKgsl0g4JgvU"
-GEMINI_API_KEY = "AQ.Ab8RN6LYA6jNAB1_pW17b0Ncs4pU7lOziNvU1uqWNCoC21ogXw"
+AI_API_KEY = "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"
 ADMIN_USER_ID = 0
 
 CHANNELS = {
