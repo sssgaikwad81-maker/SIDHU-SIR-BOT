@@ -1,14 +1,19 @@
 """
-Sidhu Sir's Ultimate Multi-Channel AI Bot (Strict Accuracy + Vision + PDF + Manual Edit + Full Preview)
-========================================================================================================
+Sidhu Sir's Ultimate Multi-Channel AI Bot (Strict Accuracy + Vision + PDF + Word Doc + Manual Edit + Back Everywhere)
+=====================================================================================================================
 Features:
 1. Strict Historical & Constitutional Accuracy Guardrails (Swaraj Bill = Tilak's inspiration; Mahad = Dr. Ambedkar, etc.).
-2. Handles Text Topics, Book Page Photos (Vision AI with Qwen 3.8 27B), and PDFs (pypdf up to 10 pages).
-3. ✏️ Manual Edit Option: Fix any word (e.g., 'बदला: सादर केले -> टिळकांच्या प्रेरणेने') or rewrite entire question before posting!
-4. 📋 Full Question Preview (Displays ALL generated questions Q1, Q2, Q3, Q4, Q5... before posting).
-5. 🔙 Back button navigation on EVERY step (including Preview & Edit screens).
+2. Handles:
+   - 📝 Text Topics
+   - 📸 Book Page Photos (Vision AI with Qwen 3.8 27B)
+   - 📄 PDF Documents (pypdf up to 10 pages)
+   - 📑 Word Files (.docx / .doc built-in zero-dependency extractor)
+3. 🔙 Back button navigation on EVERY step from start to finish (Format, Channel, Level, Lang, Count, Timer, Preview, Edit).
+4. ✏️ Manual Edit Option: Fix any word (e.g., 'बदला: सादर केले -> टिळकांच्या प्रेरणेने') or rewrite entire question before posting!
+5. 📋 Full Question Preview (Displays ALL generated questions Q1, Q2, Q3, Q4, Q5... before posting).
 6. ♾️ Normal Quiz (Permanent open) vs ⏱️ Live Test (45s Timer).
 7. 📊 Quizzes, 💡 Mnemonics, 📌 Quick Notes for all 7 channels.
+8. 🛡️ Bulletproof Model Fallback: Prioritizes Llama 3.3/3.1 and auto-retries across reliable engines.
 """
 
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -19,6 +24,8 @@ import os
 import re
 import threading
 import time
+import zipfile
+import xml.etree.ElementTree as ET
 import telebot
 from telebot import types
 import requests
@@ -69,8 +76,23 @@ user_sessions = {}
 pending_posts = {}
 
 # ------------------------------------------------------------------------------
-# 2. DYNAMIC GROQ AI ENGINE WITH STRICT FACTUAL GUARDRAILS
+# 2. BULLETPROOF GROQ AI ENGINE WITH AUTO-FALLBACK & STRICT GUARDRAILS
 # ------------------------------------------------------------------------------
+PREFERRED_TEXT_MODELS = [
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "qwen/qwen3.8-27b"
+]
+
+PREFERRED_VISION_MODELS = [
+    "qwen/qwen3.8-27b",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "llama-3.2-11b-vision-preview",
+    "llama-3.2-90b-vision-preview"
+]
+
 cached_groq_text_model = None
 cached_groq_vision_model = None
 
@@ -85,27 +107,35 @@ def get_active_groq_model(vision=False):
     try:
         r = requests.get("https://api.groq.com/openai/v1/models", headers=headers, timeout=5)
         if r.status_code == 200:
-            models = [m["id"] for m in r.json().get("data", [])]
-            for m in models:
-                if any(v in m.lower() for v in ["qwen", "vision", "scout"]):
-                    cached_groq_vision_model = m
+            available = [m["id"] for m in r.json().get("data", [])]
+
+            # Priority 1: Match against reliable text models
+            for pref in PREFERRED_TEXT_MODELS:
+                if pref in available:
+                    cached_groq_text_model = pref
                     break
-            for m in models:
-                if not any(x in m.lower() for x in ["whisper", "guard", "embed", "tts", "safeguard"]):
-                    cached_groq_text_model = m
+
+            # Priority 2: Match against reliable vision models
+            for pref in PREFERRED_VISION_MODELS:
+                if pref in available:
+                    cached_groq_vision_model = pref
                     break
     except Exception:
         pass
 
     if vision:
         return cached_groq_vision_model or "qwen/qwen3.8-27b"
-    return cached_groq_text_model or "llama-3.1-8b-instant"
+    return cached_groq_text_model or "llama-3.3-70b-versatile"
 
 def ask_groq(prompt: str) -> str:
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {GROQ_API_KEY.strip()}", "Content-Type": "application/json"}
-    model_name = get_active_groq_model(vision=False)
-    
+
+    first_choice = get_active_groq_model(vision=False)
+    candidate_models = [first_choice, "llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-20b"]
+    seen = set()
+    candidate_models = [m for m in candidate_models if m and not (m in seen or seen.add(m))]
+
     system_rules = (
         "You are an authoritative, senior exam paper setter for UPSC and MPSC examinations.\n"
         "STRICT FACTUAL & TERMINOLOGICAL ACCURACY RULES (CRITICAL):\n"
@@ -124,23 +154,33 @@ def ask_groq(prompt: str) -> str:
         "   - Rajarshi Chhatrapati Shahu Maharaj: Kolhapur 50% reservation (1902), primary education act (1917), Satya Shodhak support, Vedokta.\n"
         "   - Salt Satyagraha / Dandi March (1930), Champaran (1917), Kheda (1918), Non-Cooperation (1920), Quit India (1942) are Mahatma Gandhi.\n"
         "4. Source Material Fidelity:\n"
-        "   - When notes or PDF content are provided, questions and answers MUST strictly adhere to the exact facts and vocabulary stated in the notes.\n"
+        "   - When notes, Word docs, or PDF content are provided, questions and answers MUST strictly adhere to the exact facts and vocabulary stated in the notes.\n"
         "   - Use authentic MPSC Marathi phrasing: 'कोणाच्या प्रेरणेने', 'कोणाच्या अध्यक्षतेखाली', 'खालीलपैकी अचूक विधान कोणते', etc. Never use loose or inaccurate verbs.\n"
     )
-    
-    payload = {
-        "model": model_name,
-        "messages": [
-            {"role": "system", "content": system_rules},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.25,  # Very low temperature for maximum precision
-        "max_tokens": 2048
-    }
-    resp = requests.post(url, headers=headers, json=payload, timeout=35)
-    if resp.status_code == 200:
-        return resp.json()["choices"][0]["message"]["content"]
-    raise Exception(f"AI Error ({model_name}): {resp.status_code} {resp.text}")
+
+    last_error = ""
+    for model_name in candidate_models:
+        payload = {
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": system_rules},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.25,
+            "max_tokens": 2048
+        }
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=35)
+            if resp.status_code == 200:
+                return resp.json()["choices"][0]["message"]["content"]
+            else:
+                last_error = f"AI Error ({model_name}): {resp.status_code} {resp.text}"
+                continue
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    raise Exception(last_error or "AI Generation failed.")
 
 def parse_json_mcqs(text: str) -> list:
     clean = re.sub(r"```json\s*", "", text)
@@ -150,17 +190,18 @@ def parse_json_mcqs(text: str) -> list:
     return data if isinstance(data, list) else [data]
 
 # ------------------------------------------------------------------------------
-# 3. INPUT HANDLERS: TEXT, PHOTO, PDF & MANUAL EDIT
+# 3. INPUT HANDLERS: TEXT, PHOTO, PDF, WORD DOC & MANUAL EDIT
 # ------------------------------------------------------------------------------
 @bot.message_handler(commands=['start', 'help'])
 def start_cmd(msg):
     text = (
         "🚀 *Sidhu Sir's Ultimate Quiz & Content Bot Active!*\n\n"
         "✨ **तुम्ही काय पाठवू शकता?**\n"
-        "1. 📝 **विषयाचे नाव** थेट टाईप करून पाठवा (उदा. `राज्यघटनेची निर्मिती` किंवा `महाड सत्याग्रह`).\n"
+        "1. 📝 **विषयाचे नाव** थेट टाईप करा (उदा. `राज्यघटनेची निर्मिती` किंवा `महाड सत्याग्रह`).\n"
         "2. 📸 **पुस्तकाचा फोटो** काढून पाठवा (AI पान वाचून अचूक प्रश्न काढेल).\n"
-        "3. 📄 **नोट्सची PDF** पाठवा (AI पीडीएफ मधील मुद्द्यांवरून अचूक शब्दांत प्रश्न बनवेल).\n\n"
-        "👉 **सुरुवात करण्यासाठी:** खाली मेसेज, फोटो किंवा PDF पाठवा!"
+        "3. 📄 **नोट्सची PDF** पाठवा (AI पानांमधील मजकूर वाचून प्रश्न बनवेल).\n"
+        "4. 📑 **Word फाईल (.docx)** पाठवा (AI नोट्स वाचून त्वरित प्रश्न संच बनवेल).\n\n"
+        "👉 **सुरुवात करण्यासाठी:** खाली मेसेज, फोटो, PDF किंवा Word फाईल पाठवा!"
     )
     bot.send_message(msg.chat.id, text, parse_mode="Markdown")
 
@@ -239,40 +280,60 @@ def extract_text_from_photo(img_bytes: bytes) -> str:
         return resp.json()["choices"][0]["message"]["content"]
     raise Exception(f"Vision API Error ({model_name}): {resp.status_code} {resp.text[:100]}")
 
-# 3. PDF Document Input
+# 3. Word Document (.docx) Extractor (Pure Standard Library - Zero Dependency)
+def extract_text_from_docx(docx_bytes: bytes) -> str:
+    try:
+        with zipfile.ZipFile(io.BytesIO(docx_bytes)) as z:
+            xml_content = z.read('word/document.xml')
+            tree = ET.fromstring(xml_content)
+            paragraphs = []
+            for p in tree.iter('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p'):
+                texts = [t.text for t in p.iter('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t') if t.text]
+                if texts:
+                    paragraphs.append("".join(texts))
+            return "\n".join(paragraphs)
+    except Exception:
+        return ""
+
+# 4. Document Handler (PDF & Word .docx)
 @bot.message_handler(content_types=['document'])
 def handle_doc(msg):
-    fname = msg.document.file_name.lower() if msg.document.file_name else "file.pdf"
-    if not fname.endswith('.pdf'):
-        bot.reply_to(msg, "कृपया केवळ PDF फाईल किंवा पुस्तकाचा फोटो पाठवा.")
+    fname = msg.document.file_name.lower() if msg.document.file_name else "file"
+    is_pdf = fname.endswith('.pdf')
+    is_docx = fname.endswith('.docx') or fname.endswith('.doc')
+
+    if not (is_pdf or is_docx):
+        bot.reply_to(msg, "कृपया केवळ PDF, Word फाईल (.docx) किंवा पुस्तकाचा फोटो पाठवा.")
         return
 
-    if pypdf is None:
-        bot.reply_to(msg, "⚠️ PDF वाचण्यासाठी GitHub वरील `requirements.txt` मध्ये `pypdf` असणे आवश्यक आहे.\n\n📸 तोपर्यंत तुम्ही **पुस्तकाच्या पानाचा थेट फोटो** पाठवू शकता, AI फोटो अचूक वाचून प्रश्न बनवेल!")
-        return
-
-    status = bot.reply_to(msg, f"📄 *PDF मिळाली:* `{fname}`\nमजकूर वाचत आहे...", parse_mode="Markdown")
+    status = bot.reply_to(msg, f"📄 *दस्तऐवज मिळाला:* `{fname}`\nमजकूर वाचत आहे...", parse_mode="Markdown")
     try:
         file_info = bot.get_file(msg.document.file_id)
-        pdf_bytes = bot.download_file(file_info.file_path)
+        file_bytes = bot.download_file(file_info.file_path)
 
-        # Read text from PDF (up to first 10 pages for comprehensive coverage)
-        reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
         extracted = ""
-        for page in reader.pages[:10]:
-            t = page.extract_text()
-            if t:
-                extracted += t + "\n"
+        if is_docx:
+            extracted = extract_text_from_docx(file_bytes)
+        elif is_pdf:
+            if pypdf is None:
+                bot.reply_to(msg, "⚠️ PDF वाचण्यासाठी GitHub वरील `requirements.txt` मध्ये `pypdf` असणे आवश्यक आहे.\n\n📸 तोपर्यंत तुम्ही **Word फाईल (.docx)** किंवा **पुस्तकाचा फोटो** पाठवू शकता!")
+                return
+            reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+            for page in reader.pages[:10]:
+                t = page.extract_text()
+                if t:
+                    extracted += t + "\n"
 
         bot.delete_message(msg.chat.id, status.message_id)
         if not extracted.strip():
-            bot.send_message(msg.chat.id, "⚠️ या PDF मधून टेक्स्ट काढता आले नाही (कदाचित ही स्कॅन केलेली इमेज PDF असावी). कृपया पानाचा थेट फोटो काढून पाठवा.")
+            bot.send_message(msg.chat.id, "⚠️ या फाईलमधून मजकूर काढता आले नाही (कदाचित ही स्कॅन केलेली प्रतिमा असावी). कृपया थेट फोटो काढून पाठवा.")
             return
 
-        user_sessions[msg.chat.id] = {"topic": extracted[:3000], "source_type": "pdf"}
-        show_format_menu(msg.chat.id, f"📄 {fname} (PDF नोट्स)")
+        user_sessions[msg.chat.id] = {"topic": extracted[:3000], "source_type": "doc"}
+        label = f"📄 {fname} (नोट्स)"
+        show_format_menu(msg.chat.id, label)
     except Exception as e:
-        bot.edit_message_text(f"❌ PDF वाचताना त्रुटी: {str(e)}", msg.chat.id, status.message_id)
+        bot.edit_message_text(f"❌ फाईल वाचताना त्रुटी: {str(e)}", msg.chat.id, status.message_id)
 
 def show_format_menu(cid, topic_label, mid=None):
     markup = types.InlineKeyboardMarkup(row_width=1)
@@ -280,6 +341,7 @@ def show_format_menu(cid, topic_label, mid=None):
         types.InlineKeyboardButton("📊 Quiz Poll (प्रश्न संच)", callback_data="fmt_quiz"),
         types.InlineKeyboardButton("💡 Mnemonic (शॉर्टकट ट्रिक)", callback_data="fmt_mnemonic"),
         types.InlineKeyboardButton("📌 Quick Notes (रिव्हिजन नोट्स)", callback_data="fmt_notes"),
+        types.InlineKeyboardButton("🔙 मागे जा (नवीन विषय टाका)", callback_data="back_to_start"),
         types.InlineKeyboardButton("❌ रद्द करा (Cancel)", callback_data="can_")
     )
     text = f"📝 **सामग्री:** `{topic_label[:80]}`\n\n👇 **काय तयार करायचे आहे?**"
@@ -289,7 +351,7 @@ def show_format_menu(cid, topic_label, mid=None):
         bot.send_message(cid, text, reply_markup=markup, parse_mode="Markdown")
 
 # ------------------------------------------------------------------------------
-# 4. STEP-BY-STEP FLOW WITH BACK BUTTONS & MANUAL EDIT
+# 5. STEP-BY-STEP FLOW WITH BACK BUTTONS ON EVERY STEP
 # ------------------------------------------------------------------------------
 @bot.callback_query_handler(func=lambda call: True)
 def handle_cb(call):
@@ -297,8 +359,12 @@ def handle_cb(call):
     mid = call.message.message_id
     sess = user_sessions.get(cid, {})
 
+    # Step 0: Back to Start (New Topic)
+    if call.data == "back_to_start":
+        bot.edit_message_text("🔄 **सुरुवात:**\nकृपया खाली नवीन विषयाचे नाव, पुस्तकाचा फोटो, PDF किंवा Word फाईल (.docx) पाठवा.", cid, mid)
+
     # Step 1: Format Chosen -> Choose Channel
-    if call.data.startswith("fmt_"):
+    elif call.data.startswith("fmt_"):
         sess["fmt"] = call.data.replace("fmt_", "")
         show_channel_menu(cid, mid)
 
@@ -389,7 +455,7 @@ def handle_cb(call):
             f"2️⃣ **किंवा नवीन सुधारित प्रश्न थेट टाईप करून पाठवा.**"
         )
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔙 रद्द करा / प्रिव्ह्यूवर जा", callback_data=f"back_to_prev_{post_id}"))
+        markup.add(types.InlineKeyboardButton("🔙 रद्द करा / प्रिव्ह्यूवर जा (Back)", callback_data=f"back_to_prev_{post_id}"))
         bot.edit_message_text(prompt_txt, cid, mid, reply_markup=markup, parse_mode="Markdown")
 
     # Back to Preview
@@ -528,7 +594,7 @@ def run_content_generation(cid, mid, sess):
                 f"CRITICAL MPSC / UPSC QUESTION DESIGN RULES:\n"
                 f"1. Generate exactly {cnt} MCQs strictly based on authentic facts from the source material and MPSC syllabus.\n"
                 f"2. Strict historical & constitutional phrasing:\n"
-                f"   - NEVER say a leader 'सादर केले' (introduced) unless it was officially introduced in a legislative assembly or parliament. E.g., for the 1895 Swaraj Bill, the correct wording MUST BE: '१८९५ चे स्वराज्य विधेयक (Constitution of India Bill) कोणाच्या प्रेरणेने/मार्गदर्शनाखाली तयार करण्यात आले होते?'.\n"
+                f"   - NEVER say a leader 'सादर केले' (introduced) unless it was officially introduced in a legislative assembly or parliament. E.g., for 1895 Swaraj Bill, the correct wording MUST BE: '१८९५ चे स्वराज्य विधेयक (Constitution of India Bill) कोणाच्या प्रेरणेने/मार्गदर्शनाखाली तयार करण्यात आले होते?'.\n"
                 f"   - Questions, options, and explanations must be grammatically flawless and academically precise in standard Marathi.\n"
                 f"3. Question max 280 chars, 4 options under 90 chars each, correct index 0-3, explanation max 140 chars.\n"
                 f"Return ONLY valid JSON array:\n"
@@ -604,7 +670,7 @@ def render_preview_message(cid, mid, post_id, sess):
         bot.send_message(cid, preview, reply_markup=markup, parse_mode="Markdown")
 
 # ------------------------------------------------------------------------------
-# 5. RUN BOT (ROCK SOLID INFINITY POLLING)
+# 6. RUN BOT (ROCK SOLID INFINITY POLLING)
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     print("🚀 Sidhu Sir's Bot is online 24/7!")
