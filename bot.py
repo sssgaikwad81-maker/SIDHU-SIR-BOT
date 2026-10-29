@@ -258,10 +258,13 @@ def ask_groq(prompt: str, json_mode: bool = False) -> str:
 def format_statements_cleanly(text: str) -> str:
     """Formats statements (अ, ब, क or 1, 2, 3) cleanly one below the other with spacing."""
     t = text.strip()
-    t = re.sub(r"\s*(\([अ-हa-dA-D]\))\s*", r"\n\n\1 ", t)
-    t = re.sub(r"\s*(\b[1-4]\.)\s*", r"\n\n\1 ", t)
-    t = re.sub(r"\s*(Statement[- ][I|V|X\d]+[:\.])\s*", r"\n\n\1 ", t, flags=re.IGNORECASE)
-    t = re.sub(r"\s*(खालीलपैकी|Which of the statements|वरीलपैकी|Select the correct)\s*", r"\n\n\1 ", t)
+    # Normalize inline statement numbers like " 2. " or " 3. " or "(अ)"
+    t = re.sub(r"(?<=[^\n])\s*(\([अ-हa-dA-D]\))\s*", r"\n\1 ", t)
+    t = re.sub(r"(?<=[^\n])\s*(\b[1-4]\.)\s*", r"\n\1 ", t)
+    t = re.sub(r"(?<=[^\n])\s*(Statement[- ][I|V|X\d]+[:\.])\s*", r"\n\1 ", t, flags=re.IGNORECASE)
+    # Question conclusion line
+    t = re.sub(r"(?<=[^\n])\s*(खालीलपैकी|Which of the statements|वरीलपैकी|Select the correct|Arrange the following)\s*", r"\n\n\1 ", t, flags=re.IGNORECASE)
+    # Cleanup extra lines
     t = re.sub(r"\n{3,}", "\n\n", t).strip()
     return t
 
@@ -305,6 +308,7 @@ def standardize_mcq_for_exam(q: dict, lvl: str) -> dict:
 
     for idx in range(4):
         opt_text = options[idx].strip() if idx < len(options) else f"पर्याय {idx+1}"
+        opt_text = re.sub(r"^\([A-Da-d१-४1-4]\)\s*", "", opt_text).strip()
         opt_text = re.sub(r"^[A-Da-d१-४1-4][\.\:\)]\s*", "", opt_text).strip()
 
         if is_mpsc:
@@ -322,8 +326,8 @@ def standardize_mcq_for_exam(q: dict, lvl: str) -> dict:
     return q
 
 def extract_single_mcq_block(block: str) -> dict:
-    """Robustly extracts an MCQ ensuring statements 1, 2, 3 are NEVER confused with options."""
-    ans_m = re.search(r"(?:उत्तर|Ans(?:wer)?|Correct)\s*[:\-]?\s*([A-Da-d१-४1-4])", block, re.IGNORECASE)
+    """Robustly extracts an MCQ ensuring statements 1, 2, 3 and chronological sequences are NEVER confused with options."""
+    ans_m = re.search(r"(?:\n\s*|\A)(?:उत्तर|Ans(?:wer)?|Correct)\s*[:\-]?\s*[\(\[]?\s*([A-Da-d१-४1-4])\s*[\)\]]?", block, re.IGNORECASE)
     corr_idx = 0
     if ans_m:
         ch = ans_m.group(1)
@@ -334,54 +338,114 @@ def extract_single_mcq_block(block: str) -> dict:
         elif ch.upper() in "ABCD":
             corr_idx = ord(ch.upper()) - ord("A")
 
-    exp_m = re.search(r"(?:स्पष्टीकरण|Explanation|Exp)\s*[:\-]?\s*(.+)", block, re.IGNORECASE | re.DOTALL)
+    exp_m = re.search(r"(?:\n\s*|\A)(?:स्पष्टीकरण|Explanation|Exp)\s*[:\-]?\s*(.+)", block, re.IGNORECASE | re.DOTALL)
     exp = exp_m.group(1).strip()[:140] if exp_m else "संदर्भ नोट्सनुसार अचूक उत्तर."
 
-    main_body = block
-    if ans_m:
-        main_body = main_body[:ans_m.start()]
+    main = block
+    cut_pos = len(main)
+    if ans_m and ans_m.start() > 20:
+        cut_pos = min(cut_pos, ans_m.start())
+    if exp_m and exp_m.start() > 20:
+        cut_pos = min(cut_pos, exp_m.start())
+    main = main[:cut_pos].strip()
 
-    # Find options strictly matching (A)-(D) or 1)-4) or १)-४) at the end of the block
-    pat_letters = list(re.finditer(r"(?:(?:\(([A-Da-d])\)|(?:^|\n)\s*([A-Da-d])[\.\:\)])\s*(.+?))(?=(?:\(([A-Da-d])\)|(?:^|\n)\s*([A-Da-d])[\.\:\)]|$))", main_body, re.DOTALL))
-    pat_nums = list(re.finditer(r"(?:(?:(?:\(([१-४1-4])\)|(?:^|\n)\s*([१-४1-4])[\.\:\)]))\s*(.+?))(?=(?:(?:\(([१-४1-4])\)|(?:^|\n)\s*([१-४1-4])[\.\:\)]|$)))", main_body, re.DOTALL))
+    # Schemas: Strictly sequential 4 options!
+    patterns = [
+        # (1) ... (2) ... (3) ... (4) ...
+        r"(?s)(.*?)\(1\)\s*(.+?)\(2\)\s*(.+?)\(3\)\s*(.+?)\(4\)\s*(.+)$",
+        # (a) ... (b) ... (c) ... (d) ...
+        r"(?s)(.*?)\([aA]\)\s*(.+?)\([bB]\)\s*(.+?)\([cC]\)\s*(.+?)\([dD]\)\s*(.+)$",
+        # (अ) ... (ब) ... (क) ... (ड) ...
+        r"(?s)(.*?)\(अ\)\s*(.+?)\(ब\)\s*(.+?)\(क\)\s*(.+?)\(ड\)\s*(.+)$",
+        # 1) ... 2) ... 3) ... 4) ...
+        r"(?s)(.*?)(?:^|\n|\s)1\)\s*(.+?)(?:^|\n|\s)2\)\s*(.+?)(?:^|\n|\s)3\)\s*(.+?)(?:^|\n|\s)4\)\s*(.+)$",
+        # १) ... २) ... ३) ... ४) ...
+        r"(?s)(.*?)(?:^|\n|\s)१[\)\.]\s*(.+?)(?:^|\n|\s)२[\)\.]\s*(.+?)(?:^|\n|\s)३[\)\.]\s*(.+?)(?:^|\n|\s)४[\)\.]\s*(.+)$",
+        # A. ... B. ... C. ... D. ... or A) ... B) ...
+        r"(?s)(.*?)(?:^|\n|\s)[aA][\.\)]\s*(.+?)(?:^|\n|\s)[bB][\.\)]\s*(.+?)(?:^|\n|\s)[cC][\.\)]\s*(.+?)(?:^|\n|\s)[dD][\.\)]\s*(.+)$",
+        # 1. ... 2. ... 3. ... 4. ... (as options)
+        r"(?s)(.*?)(?:^|\n)1\.\s*(.+?)(?:^|\n)2\.\s*(.+?)(?:^|\n)3\.\s*(.+?)(?:^|\n)4\.\s*(.+)$"
+    ]
 
-    opts = []
-    q_text = ""
-
-    if len(pat_letters) >= 4:
-        chosen = pat_letters[-4:]
-        q_text = main_body[:chosen[0].start()].strip()
-        opts = [m.group(3).strip()[:90] for m in chosen]
-    elif len(pat_nums) >= 4:
-        chosen = pat_nums[-4:]
-        q_text = main_body[:chosen[0].start()].strip()
-        opts = [m.group(3).strip()[:90] for m in chosen]
-
-    q_text = re.sub(r"^\s*(?:Q(?:uestion)?[\.\s]*\d+[\.:\)]|\d+[\.:\)]|प्रश्न\s*\d+[\.:\)])\s*", "", q_text, flags=re.IGNORECASE).strip()
-
-    if q_text and len(opts) == 4:
-        return {
-            "question": q_text,
-            "options": opts,
-            "correct_option_id": corr_idx if 0 <= corr_idx <= 3 else 0,
-            "explanation": exp
-        }
+    for p in patterns:
+        m = re.search(p, main)
+        if m:
+            q_part = m.group(1).strip()
+            q_clean = re.sub(r"^\s*(?:Q(?:uestion)?[\.\s]*\d+[\.:\)]|\d+[\.:\)]|प्रश्न\s*\d+[\.:\)])\s*", "", q_part, flags=re.IGNORECASE).strip()
+            if len(q_clean) > 5:
+                raw_opts = [m.group(i).strip()[:90] for i in range(2, 6)]
+                # Clean nested option tags if any
+                clean_opts = []
+                for o in raw_opts:
+                    o = re.sub(r"^\([A-Da-d१-४1-4]\)\s*", "", o).strip()
+                    o = re.sub(r"^[A-Da-d१-४1-4][\.\:\)]\s*", "", o).strip()
+                    clean_opts.append(o)
+                if all(len(o) > 0 for o in clean_opts):
+                    return {
+                        "question": q_clean,
+                        "options": clean_opts,
+                        "correct_option_id": corr_idx if 0 <= corr_idx <= 3 else 0,
+                        "explanation": exp
+                    }
     return None
+
+def split_document_into_question_blocks(text: str) -> list:
+    """Splits document text into individual MCQ blocks without breaking statements inside questions."""
+    text = text.strip()
+    if not text:
+        return []
+
+    # Strategy 1: Explicit Q / Question / प्रश्न markers
+    q_pattern = r"(?:\n\s*|\A)(?:Q(?:uestion)?[\.\s]*\d+[\.:\)]|प्रश्न\s*\d+[\.:\)])\s*"
+    if len(re.findall(q_pattern, text, flags=re.IGNORECASE)) >= 2:
+        parts = re.split(q_pattern, text, flags=re.IGNORECASE)
+        blocks = [p.strip() for p in parts if p.strip()]
+        if len(blocks) >= 2:
+            return blocks
+
+    # Strategy 2: Splitting by Answer boundaries
+    ans_pat = r"(?:(?:\n\s*|\A)(?:Answer|Ans(?:wer)?|उत्तर|Correct)\s*[:\-]?\s*[\(\[]?[A-Da-d१-४1-4][\)\]]?.*?(?:\n\s*|\Z))"
+    if len(re.findall(ans_pat, text, flags=re.IGNORECASE)) >= 2:
+        blocks = []
+        last_idx = 0
+        for m in re.finditer(ans_pat, text, flags=re.IGNORECASE):
+            end_pos = m.end()
+            block = text[last_idx:end_pos].strip()
+            if block:
+                blocks.append(block)
+            last_idx = end_pos
+        remainder = text[last_idx:].strip()
+        if remainder:
+            blocks.append(remainder)
+        if len(blocks) >= 2:
+            return blocks
+
+    # Strategy 3: Numbered questions preceded by double newlines: \n\n+\d+[\.:\)]
+    num_q_pat = r"(?:\n\s*\n\s*|\A)\s*(\d+)[\.:\)]\s+"
+    matches = list(re.finditer(num_q_pat, text))
+    if len(matches) >= 2:
+        blocks = []
+        for i in range(len(matches)):
+            start = matches[i].end()
+            end = matches[i+1].start() if i + 1 < len(matches) else len(text)
+            b = text[start:end].strip()
+            if b:
+                blocks.append(b)
+        if len(blocks) >= 2:
+            return blocks
+
+    # Strategy 4: Fallback to triple/double-newline blocks
+    blocks = [b.strip() for b in re.split(r"\n\s*\n\s*\n+", text) if b.strip()]
+    return blocks if blocks else [text]
 
 def parse_all_document_mcqs(text: str) -> list:
     """Extracts all MCQs from document text without dropping statements."""
     mcqs = []
-    # Split by Question markers
-    blocks = re.split(r"(?:\n\s*|\A)(?:Q(?:uestion)?[\.\s]*\d+[\.:\)]|\d+[\.:\)]|प्रश्न\s*\d+[\.:\)])\s*", text, flags=re.IGNORECASE)
-
+    blocks = split_document_into_question_blocks(text)
     for b in blocks:
-        b = b.strip()
-        if not b:
-            continue
         parsed = extract_single_mcq_block(b)
         if parsed:
             mcqs.append(parsed)
-
     return mcqs
 
 def parse_plain_text_mcqs(text: str) -> list:
@@ -1192,20 +1256,37 @@ def run_content_generation(cid, mid, sess):
                         if lvl == "upsc":
                             pattern_instruction = (
                                 "EXAM LEVEL: UPSC Civil Services Examination (CSE) Prelims Standard.\n"
-                                "QUESTION FORMAT (MANDATORY UPSC STYLE):\n"
-                                "- Analytical, multi-statement questions ('Consider the following statements:\\n1. ...\\n\\n2. ...\\n\\nWhich of the statements given above is/are correct?').\n"
-                                "- Statements in the question text MUST be numbered with digits: 1., 2., 3. and separated by newlines!\n"
-                                "- Options MUST be lettered in English: (a) 1 only, (b) 2 only, (c) Both 1 and 2, (d) Neither 1 nor 2 OR (a) Only one, (b) Only two, (c) All three, (d) None.\n"
-                                "- If the topic is a simple fact, keep it a direct 1-liner question without fake statements.\n"
+                                "QUESTION FORMAT & VARIETY (MANDATORY UPSC CSE GUIDELINES):\n"
+                                "1. STRICT DIVERSITY OF CORRECT ANSWERS (RANDOMIZE!):\n"
+                                "   - The correct answers MUST BE EVENLY DISTRIBUTED across (a), (b), (c), and (d) (indices 0, 1, 2, 3)!\n"
+                                "   - NEVER make every question '(c) Both 1 and 2' or index 2! Distribute answers evenly across A, B, C, D.\n"
+                                "2. REALISTIC EXAM TRAPS & FALSE STATEMENTS:\n"
+                                "   - In real UPSC Prelims, at least 40% to 50% of statements are FALSE or contain subtle exam traps (e.g. swapped organs/bones/functions, wrong articles, reversed causes, incorrect years, exaggerated absolutes like 'solely' or 'always').\n"
+                                "   - Introduce false statements so that (a) 1 only, (b) 2 only, or (d) Neither 1 nor 2 are frequently correct!\n"
+                                "3. MIX MULTIPLE QUESTION FORMATS ACROSS THE BATCH:\n"
+                                "   - Format A: 2 or 3 Statements ('Consider the following statements... Which of the statements given above is/are correct?').\n"
+                                "   - Format B: Inverted Questions ('Which of the statements given above is/are NOT correct?').\n"
+                                "   - Format C: Pairs Matching ('Consider the following pairs... How many pairs are correctly matched? (a) Only one pair, (b) Only two pairs, (c) All three pairs, (d) None').\n"
+                                "   - Format D: Chronological Order / Sequence ('Arrange in correct order...').\n"
+                                "   - Format E: Direct 1-liner factual MCQs for discoveries, scientific laws, or terms.\n"
+                                "   - Statements in the question text MUST be numbered: 1., 2., 3. with newlines.\n"
+                                "   - Options MUST be lettered in English: (a) ..., (b) ..., (c) ..., (d) ...\n"
                             )
                         elif lvl == "rajyaseva":
                             pattern_instruction = (
                                 "EXAM LEVEL: MPSC राज्यसेवा (Civil Services) पूर्व परीक्षा Standard.\n"
-                                "QUESTION FORMAT (MANDATORY MPSC RAJYASEVA STYLE):\n"
-                                "- बहुविधानात्मक विश्लेषणात्मक प्रश्न ('खालील विधाने विचारात घ्या:\\n(अ) ...\\n\\n(ब) ...\\n\\n(क) ...\\n\\nवरीलपैकी कोणते/ती विधान/ने योग्य आहे/त?').\n"
-                                "- प्रश्न वाक्यातील विधाने MUST be lettered in Marathi: (अ), (ब), (क), (ड) and separated by newlines!\n"
-                                "- खालील ४ पर्याय MUST be numbered in Marathi digits: १) फक्त (अ), २) (अ) आणि (ब), ३) (ब) आणि (क), ४) वरील सर्व.\n"
-                                "- जर प्रश्न थेट पुरस्कार, खेळ, व्यक्ती किंवा घटनेवर असेल तर विधाने न बनवता थेट १-ओळीचा प्रश्न आणि ४ पर्याय बनवा!\n"
+                                "QUESTION FORMAT & VARIETY (MANDATORY MPSC RAJYASEVA GUIDELINES):\n"
+                                "1. उत्तरांची विविधता (STRICT DIVERSITY & RANDOMIZATION):\n"
+                                "   - प्रत्येक प्रश्नाचे अचूक उत्तर फक्त एकच (उदा. नेहमी ३ किंवा ४) नसावे! अचूक उत्तरे १), २), ३), ४) (indices 0, 1, 2, 3) मध्ये समान विभागलेली असावीत.\n"
+                                "2. परीक्षा-स्तरीय ट्रॅप्स आणि अयोग्य विधाने (EXAM TRAPS):\n"
+                                "   - एमपीएससीच्या ४०% ते ५०% विधानांमध्ये सूक्ष्म चुका, चुकीची कलमे, बदललेल्या तारखा किंवा फॅक्ट्स असतात, जेणेकरून 'फक्त अ', 'फक्त ब', किंवा 'एकही नाही' हे पर्याय अचूक ठरतील.\n"
+                                "3. विविध प्रकारच्या प्रश्नांचे मिश्रण (MIX FORMATS):\n"
+                                "   - प्रकार १: बहुविधानात्मक ('खालील विधाने विचारात घ्या... योग्य विधान/ने निवडा').\n"
+                                "   - प्रकार २: अयोग्य विधान ओळखा ('खालीलपैकी कोणते विधान चुकीचे/अयोग्य आहे?').\n"
+                                "   - प्रकार ३: जोड्या लावा / कालानुक्रम ('योग्य कालानुक्रम लावा...').\n"
+                                "   - प्रकार ४: थेट फॅक्ट्युअल प्रश्न (पुरस्कार, खेळ, पुस्तके, दिनविशेष यासाठी विधाने न लावता थेट प्रश्न व ४ पर्याय).\n"
+                                "   - विधाने MUST be lettered in Marathi: (अ), (ब), (क), (ड) with newlines.\n"
+                                "   - खालील ४ पर्याय MUST be numbered in Marathi digits: १) ..., २) ..., ३) ..., ४) ...\n"
                             )
                         elif lvl == "combine":
                             pattern_instruction = (
