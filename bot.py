@@ -1,12 +1,14 @@
 """
-Sidhu Sir's Ultimate Multi-Channel AI Bot (Strict Accuracy + Vision + PDF + Back Navigation)
-=============================================================================================
+Sidhu Sir's Ultimate Multi-Channel AI Bot (Strict Accuracy + Vision + PDF + Manual Edit + Full Preview)
+========================================================================================================
 Features:
-1. Strict Historical Accuracy Guardrails (Mahad Satyagraha = Dr. B.R. Ambedkar, etc.).
-2. Handles Text Topics, Book Page Photos (Vision AI with Qwen 3.8 27B), and PDFs.
-3. 🔙 Back button navigation on every step.
-4. ♾️ Normal Quiz (Permanent open) vs ⏱️ Live Test (45s Timer).
-5. 📊 Quizzes, 💡 Mnemonics, 📌 Quick Notes for all 7 channels.
+1. Strict Historical & Constitutional Accuracy Guardrails (Swaraj Bill = Tilak's inspiration; Mahad = Dr. Ambedkar, etc.).
+2. Handles Text Topics, Book Page Photos (Vision AI with Qwen 3.8 27B), and PDFs (pypdf up to 10 pages).
+3. ✏️ Manual Edit Option: Fix any word (e.g., 'बदला: सादर केले -> टिळकांच्या प्रेरणेने') or rewrite entire question before posting!
+4. 📋 Full Question Preview (Displays ALL generated questions Q1, Q2, Q3, Q4, Q5... before posting).
+5. 🔙 Back button navigation on EVERY step (including Preview & Edit screens).
+6. ♾️ Normal Quiz (Permanent open) vs ⏱️ Live Test (45s Timer).
+7. 📊 Quizzes, 💡 Mnemonics, 📌 Quick Notes for all 7 channels.
 """
 
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -106,15 +108,24 @@ def ask_groq(prompt: str) -> str:
     
     system_rules = (
         "You are an authoritative, senior exam paper setter for UPSC and MPSC examinations.\n"
-        "STRICT FACTUAL ACCURACY RULES (CRITICAL):\n"
-        "1. Never hallucinate or confuse historical figures, leaders, or events.\n"
-        "2. For Maharashtra & Indian History:\n"
-        "   - Mahad Satyagraha (20 March 1927), Chavdar Tale, Kalaram Temple Satyagraha (1930), Bahishkrit Hitakarini Sabha (1924), Mooknayak, and Manusmriti Dahan (25 Dec 1927) are led strictly by Dr. B.R. Ambedkar (NOT Mahatma Gandhi).\n"
-        "   - Satyashodhak Samaj is Mahatma Jyotirao Phule.\n"
-        "   - Rajarshi Chhatrapati Shahu Maharaj is associated with reservation in Kolhapur (1902), Satya Shodhak support, and Vedokta controversy.\n"
+        "STRICT FACTUAL & TERMINOLOGICAL ACCURACY RULES (CRITICAL):\n"
+        "1. Never hallucinate, confuse, or misattribute historical figures, leaders, or events.\n"
+        "2. Indian Polity & Constitution Precision (Strict):\n"
+        "   - 1895 Swaraj Bill (Constitution of India Bill, 1895): Was drafted under the inspiration and guidance of Lokmanya Bal Gangadhar Tilak ('लोकमान्य बाळ गंगाधर टिळक यांच्या प्रेरणेने / मार्गदर्शनाखाली तयार केले गेले'). NEVER write that Tilak 'सादर केले' (presented/introduced) it, as it was not introduced in any legislature. The correct question phrasing MUST BE: '१८९५ चे स्वराज्य विधेयक (Swaraj Bill) कोणाच्या प्रेरणेने/मार्गदर्शनाखाली तयार करण्यात आले होते?'.\n"
+        "   - 1934: M.N. Roy first put forward the idea of a Constituent Assembly.\n"
+        "   - 1935: INC officially demanded a Constituent Assembly.\n"
+        "   - 1938: Pt. Jawaharlal Nehru declared that the Constitution must be framed by a Constituent Assembly elected on adult franchise.\n"
+        "   - 1940: August Offer accepted the demand in principle.\n"
+        "   - 1946: Constituent Assembly constituted under the Cabinet Mission Plan.\n"
+        "   - 13 Dec 1946: Objectives Resolution moved by Nehru (passed 22 Jan 1947).\n"
+        "3. Maharashtra & Modern Indian History:\n"
+        "   - Mahad Satyagraha (20 March 1927, Chavdar Tale), Kalaram Temple Satyagraha (1930), Bahishkrit Hitakarini Sabha (1924), Mooknayak, and Manusmriti Dahan (25 Dec 1927) are strictly Dr. B.R. Ambedkar (NOT Mahatma Gandhi).\n"
+        "   - Satyashodhak Samaj: Mahatma Jyotirao Phule (1873).\n"
+        "   - Rajarshi Chhatrapati Shahu Maharaj: Kolhapur 50% reservation (1902), primary education act (1917), Satya Shodhak support, Vedokta.\n"
         "   - Salt Satyagraha / Dandi March (1930), Champaran (1917), Kheda (1918), Non-Cooperation (1920), Quit India (1942) are Mahatma Gandhi.\n"
-        "   - Do NOT associate Mahatma Gandhi with Mahad Chavdar Tale Satyagraha.\n"
-        "3. Every answer and explanation must cite authentic dates, places, and historical facts without error.\n"
+        "4. Source Material Fidelity:\n"
+        "   - When notes or PDF content are provided, questions and answers MUST strictly adhere to the exact facts and vocabulary stated in the notes.\n"
+        "   - Use authentic MPSC Marathi phrasing: 'कोणाच्या प्रेरणेने', 'कोणाच्या अध्यक्षतेखाली', 'खालीलपैकी अचूक विधान कोणते', etc. Never use loose or inaccurate verbs.\n"
     )
     
     payload = {
@@ -123,7 +134,7 @@ def ask_groq(prompt: str) -> str:
             {"role": "system", "content": system_rules},
             {"role": "user", "content": prompt}
         ],
-        "temperature": 0.3,
+        "temperature": 0.25,  # Very low temperature for maximum precision
         "max_tokens": 2048
     }
     resp = requests.post(url, headers=headers, json=payload, timeout=35)
@@ -139,26 +150,54 @@ def parse_json_mcqs(text: str) -> list:
     return data if isinstance(data, list) else [data]
 
 # ------------------------------------------------------------------------------
-# 3. INPUT HANDLERS: TEXT, PHOTO & PDF
+# 3. INPUT HANDLERS: TEXT, PHOTO, PDF & MANUAL EDIT
 # ------------------------------------------------------------------------------
 @bot.message_handler(commands=['start', 'help'])
 def start_cmd(msg):
     text = (
         "🚀 *Sidhu Sir's Ultimate Quiz & Content Bot Active!*\n\n"
         "✨ **तुम्ही काय पाठवू शकता?**\n"
-        "1. 📝 **विषयाचे नाव** थेट टाईप करून पाठवा (उदा. `महाड सत्याग्रह` किंवा `Article 32`).\n"
-        "2. 📸 **पुस्तकाचा फोटो** काढून पाठवा (AI पान वाचून थेट प्रश्न काढेल).\n"
-        "3. 📄 **नोट्सची PDF** पाठवा (AI पीडीएफ मधील मुद्द्यांवर प्रश्न बनवेल).\n\n"
+        "1. 📝 **विषयाचे नाव** थेट टाईप करून पाठवा (उदा. `राज्यघटनेची निर्मिती` किंवा `महाड सत्याग्रह`).\n"
+        "2. 📸 **पुस्तकाचा फोटो** काढून पाठवा (AI पान वाचून अचूक प्रश्न काढेल).\n"
+        "3. 📄 **नोट्सची PDF** पाठवा (AI पीडीएफ मधील मुद्द्यांवरून अचूक शब्दांत प्रश्न बनवेल).\n\n"
         "👉 **सुरुवात करण्यासाठी:** खाली मेसेज, फोटो किंवा PDF पाठवा!"
     )
     bot.send_message(msg.chat.id, text, parse_mode="Markdown")
 
-# 1. Text Input
+# 1. Text Input & Manual Edit Handler
 @bot.message_handler(func=lambda m: True, content_types=['text'])
 def handle_text(msg):
     topic = msg.text.strip()
     if not topic or topic.startswith('/'):
         return
+
+    # Check if user is currently editing a question
+    sess = user_sessions.get(msg.chat.id, {})
+    if "editing" in sess:
+        edit_info = sess.pop("editing")
+        post_id = edit_info["post_id"]
+        q_idx = edit_info["q_idx"]
+        mid = edit_info["mid"]
+
+        if post_id in pending_posts and pending_posts[post_id]["type"] == "quiz":
+            q_item = pending_posts[post_id]["data"][q_idx]
+
+            # Pattern: बदला: जुना शब्द -> नवीन शब्द (किंवा replace: old -> new)
+            rep_match = re.search(r"(?:बदला|replace)\s*:\s*(.+?)\s*(?:->|=>|–>|ते|म्हणजे)\s*(.+)", topic, re.IGNORECASE)
+            if rep_match:
+                old_w = rep_match.group(1).strip()
+                new_w = rep_match.group(2).strip()
+                q_item["question"] = q_item["question"].replace(old_w, new_w)
+                q_item["explanation"] = q_item["explanation"].replace(old_w, new_w)
+                q_item["options"] = [opt.replace(old_w, new_w) for opt in q_item["options"]]
+                bot.reply_to(msg, f"✅ **दुरुस्ती यशस्वी!**\n`{old_w}` ➔ `{new_w}`", parse_mode="Markdown")
+            else:
+                q_item["question"] = topic
+                bot.reply_to(msg, f"✅ **Q{q_idx+1} चा प्रश्न यशस्वीरीत्या बदलला!**", parse_mode="Markdown")
+
+            render_preview_message(msg.chat.id, mid, post_id, sess)
+            return
+
     user_sessions[msg.chat.id] = {"topic": topic, "source_type": "text"}
     show_format_menu(msg.chat.id, topic)
 
@@ -171,8 +210,8 @@ def handle_photo(msg):
         img_bytes = bot.download_file(file_info.file_path)
         extracted_text = extract_text_from_photo(img_bytes)
         bot.delete_message(msg.chat.id, status.message_id)
-        
-        user_sessions[msg.chat.id] = {"topic": extracted_text[:1500], "source_type": "photo"}
+
+        user_sessions[msg.chat.id] = {"topic": extracted_text[:2000], "source_type": "photo"}
         show_format_menu(msg.chat.id, "📖 पुस्तकाचे पान (Photo Scanned)")
     except Exception as e:
         bot.edit_message_text(f"❌ फोटो वाचताना त्रुटी: {str(e)}", msg.chat.id, status.message_id)
@@ -216,22 +255,22 @@ def handle_doc(msg):
     try:
         file_info = bot.get_file(msg.document.file_id)
         pdf_bytes = bot.download_file(file_info.file_path)
-        
-        # Read text from PDF
+
+        # Read text from PDF (up to first 10 pages for comprehensive coverage)
         reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
         extracted = ""
-        for page in reader.pages[:5]:  # Read first 5 pages
+        for page in reader.pages[:10]:
             t = page.extract_text()
             if t:
                 extracted += t + "\n"
-                
+
         bot.delete_message(msg.chat.id, status.message_id)
         if not extracted.strip():
             bot.send_message(msg.chat.id, "⚠️ या PDF मधून टेक्स्ट काढता आले नाही (कदाचित ही स्कॅन केलेली इमेज PDF असावी). कृपया पानाचा थेट फोटो काढून पाठवा.")
             return
 
-        user_sessions[msg.chat.id] = {"topic": extracted[:2000], "source_type": "pdf"}
-        show_format_menu(msg.chat.id, f"📄 {fname} (PDF मधील मजकूर)")
+        user_sessions[msg.chat.id] = {"topic": extracted[:3000], "source_type": "pdf"}
+        show_format_menu(msg.chat.id, f"📄 {fname} (PDF नोट्स)")
     except Exception as e:
         bot.edit_message_text(f"❌ PDF वाचताना त्रुटी: {str(e)}", msg.chat.id, status.message_id)
 
@@ -250,7 +289,7 @@ def show_format_menu(cid, topic_label, mid=None):
         bot.send_message(cid, text, reply_markup=markup, parse_mode="Markdown")
 
 # ------------------------------------------------------------------------------
-# 4. STEP-BY-STEP FLOW WITH BACK BUTTONS
+# 4. STEP-BY-STEP FLOW WITH BACK BUTTONS & MANUAL EDIT
 # ------------------------------------------------------------------------------
 @bot.callback_query_handler(func=lambda call: True)
 def handle_cb(call):
@@ -313,6 +352,53 @@ def handle_cb(call):
         sess["timer"] = 45 if t_val == "45" else None
         run_content_generation(cid, mid, sess)
 
+    elif call.data == "back_to_timer":
+        show_timer_menu(cid, mid)
+
+    # Manual Edit Menu: Choose which question to edit
+    elif call.data.startswith("edt_menu_"):
+        post_id = call.data.replace("edt_menu_", "")
+        if post_id not in pending_posts:
+            bot.answer_callback_query(call.id, "कालबाह्य झाले आहे.")
+            return
+
+        quizzes = pending_posts[post_id]["data"]
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        for idx in range(len(quizzes)):
+            markup.add(types.InlineKeyboardButton(f"✏️ Q{idx+1} दुरुस्त करा", callback_data=f"do_edit_{post_id}_{idx}"))
+        markup.add(types.InlineKeyboardButton("🔙 प्रिव्ह्यूवर परत जा (Back)", callback_data=f"back_to_prev_{post_id}"))
+        bot.edit_message_text("👇 **कोणता प्रश्न दुरुस्त करायचा आहे? निवडा:**", cid, mid, reply_markup=markup, parse_mode="Markdown")
+
+    # Enter Question Edit State
+    elif call.data.startswith("do_edit_"):
+        parts = call.data.split("_")
+        post_id = parts[2]
+        q_idx = int(parts[3])
+
+        q_item = pending_posts[post_id]["data"][q_idx]
+        sess["editing"] = {"post_id": post_id, "q_idx": q_idx, "mid": mid}
+
+        prompt_txt = (
+            f"✏️ **Q{q_idx+1} दुरुस्ती (Manual Edit):**\n\n"
+            f"📌 *सध्याचा प्रश्न:*\n`{q_item['question']}`\n\n"
+            f"💡 *सध्याचे स्पष्टीकरण:*\n_{q_item['explanation']}_\n\n"
+            f"👇 **खालीलपैकी कोणताही एक मेसेज पाठवा:**\n"
+            f"1️⃣ **केवळ विशिष्ट शब्द बदलायचा असल्यास:**\n"
+            f"`बदला: जुना शब्द -> नवीन शब्द`\n"
+            f"*(उदा. `बदला: सादर केले -> टिळकांच्या प्रेरणेने`)*\n\n"
+            f"2️⃣ **किंवा नवीन सुधारित प्रश्न थेट टाईप करून पाठवा.**"
+        )
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 रद्द करा / प्रिव्ह्यूवर जा", callback_data=f"back_to_prev_{post_id}"))
+        bot.edit_message_text(prompt_txt, cid, mid, reply_markup=markup, parse_mode="Markdown")
+
+    # Back to Preview
+    elif call.data.startswith("back_to_prev_"):
+        post_id = call.data.replace("back_to_prev_", "")
+        if "editing" in sess:
+            del sess["editing"]
+        render_preview_message(cid, mid, post_id, sess)
+
     # Step 7: Publish to Target Channel
     elif call.data.startswith("pub_"):
         post_id = call.data.replace("pub_", "")
@@ -328,12 +414,12 @@ def handle_cb(call):
             quizzes = item["data"]
             timer_sec = item.get("timer")
             brand = "\n\n🎯 Join: @sidhu_sir_official"
-            
+
             for i, q in enumerate(quizzes):
                 exp = q["explanation"]
                 if len(exp) + len(brand) <= 200:
                     exp += brand
-                
+
                 poll_kwargs = {
                     "chat_id": target_id,
                     "question": f"[{i+1}/{len(quizzes)}] {q['question']}" if len(quizzes) > 1 else q['question'],
@@ -428,7 +514,7 @@ def run_content_generation(cid, mid, sess):
     topic = sess["topic"]
     fmt = sess["fmt"]
     lang = sess["lang"]
-    
+
     bot.edit_message_text("⏳ **AI द्वारे कन्टेन्ट तयार होत आहे...** (अवघे १-२ सेकंद थांबा)...", cid, mid, parse_mode="Markdown")
     try:
         lang_str = "BILINGUAL (English / Marathi)" if lang == "bilingual" else ("Marathi only" if lang == "marathi" else "English only")
@@ -438,10 +524,12 @@ def run_content_generation(cid, mid, sess):
             cnt = sess.get("cnt", 1)
             prompt = (
                 f"Subject: {ch_info['sub']}. Exam Level: {sess.get('lvl', 'MPSC')}. Language: {lang_str}.\n"
-                f"Source Topic / Material:\n'{topic}'\n\n"
-                f"RULES (STRICT):\n"
-                f"1. Generate exactly {cnt} MCQs strictly based on authentic historical/constitutional facts.\n"
-                f"2. Ensure zero confusion between historical figures (e.g. Mahad Satyagraha is strictly Dr. B.R. Ambedkar).\n"
+                f"Source Material / Notes:\n'''\n{topic}\n'''\n\n"
+                f"CRITICAL MPSC / UPSC QUESTION DESIGN RULES:\n"
+                f"1. Generate exactly {cnt} MCQs strictly based on authentic facts from the source material and MPSC syllabus.\n"
+                f"2. Strict historical & constitutional phrasing:\n"
+                f"   - NEVER say a leader 'सादर केले' (introduced) unless it was officially introduced in a legislative assembly or parliament. E.g., for the 1895 Swaraj Bill, the correct wording MUST BE: '१८९५ चे स्वराज्य विधेयक (Constitution of India Bill) कोणाच्या प्रेरणेने/मार्गदर्शनाखाली तयार करण्यात आले होते?'.\n"
+                f"   - Questions, options, and explanations must be grammatically flawless and academically precise in standard Marathi.\n"
                 f"3. Question max 280 chars, 4 options under 90 chars each, correct index 0-3, explanation max 140 chars.\n"
                 f"Return ONLY valid JSON array:\n"
                 f"[{{\"question\":\"...\",\"options\":[\"...\",\"...\",\"...\",\"...\"],\"correct_option_id\":0,\"explanation\":\"...\"}}]"
@@ -454,37 +542,66 @@ def run_content_generation(cid, mid, sess):
                 "data": data,
                 "timer": sess.get("timer")
             }
-            
-            q1 = data[0]
-            mode_lbl = "⏱️ ४५ सेकंद टायमर" if sess.get("timer") else "♾️ कायम चालू (Normal)"
-            preview = (
-                f"📋 *Quiz Preview (Total: {len(data)})*\n"
-                f"🎯 *Target:* `{ch_info['id']}` | *Mode:* {mode_lbl}\n\n"
-                f"*Q1:* {q1['question']}\n\n"
-            )
-            for i, o in enumerate(q1['options']):
-                preview += f"{'✅' if i == q1['correct_option_id'] else '⚪'} {chr(65+i)}. {o}\n"
-            preview += f"\n💡 *Explanation:* {q1['explanation']}"
 
         elif fmt == "mnemonic":
             prompt = f"Create a memorable MNEMONIC / SHORT TRICK in {lang_str} for subject '{ch_info['sub']}' on topic '{topic}'. Ensure 100% historical accuracy. Use emojis, bold text, clear breakdown."
             text = ask_groq(prompt)
             pending_posts[post_id] = {"type": "mnemonic", "channel_id": ch_info["id"], "data": text}
-            preview = f"📋 *Mnemonic Preview*\n🎯 *Target:* `{ch_info['id']}`\n\n{text}"
 
         else: # notes
             prompt = f"Create a 1-Minute Quick Revision Note in {lang_str} for '{ch_info['sub']}' on topic '{topic}'. Ensure strict historical accuracy. 4-5 high-yield bullet points with emojis, key articles/facts, and exam traps."
             text = ask_groq(prompt)
             pending_posts[post_id] = {"type": "notes", "channel_id": ch_info["id"], "data": text}
-            preview = f"📋 *Quick Notes Preview*\n🎯 *Target:* `{ch_info['id']}`\n\n{text}"
 
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🚀 चॅनलवर पोस्ट करा", callback_data=f"pub_{post_id}"))
-        markup.add(types.InlineKeyboardButton("❌ रद्द करा (Cancel)", callback_data="can_"))
-        bot.edit_message_text(preview, cid, mid, reply_markup=markup, parse_mode="Markdown")
+        render_preview_message(cid, mid, post_id, sess)
 
     except Exception as e:
         bot.edit_message_text(f"❌ त्रुटी: {str(e)}", cid, mid)
+
+def render_preview_message(cid, mid, post_id, sess):
+    if post_id not in pending_posts:
+        return
+    item = pending_posts[post_id]
+    ch_info = CHANNELS[sess["ch"]]
+    fmt = item["type"]
+
+    if fmt == "quiz":
+        data = item["data"]
+        mode_lbl = "⏱️ ४५ सेकंद टायमर" if item.get("timer") else "♾️ कायम चालू (Normal)"
+        preview = (
+            f"📋 *Quiz Preview (एकूण {len(data)} प्रश्न तयार झाले)*\n"
+            f"🎯 *Target:* `{ch_info['id']}` | *Mode:* {mode_lbl}\n"
+            f"━━━━━━━━━━━━━━━━━━━\n\n"
+        )
+        for idx, q in enumerate(data):
+            q_text = f"*Q{idx+1}: {q['question']}*\n"
+            for i, o in enumerate(q['options']):
+                q_text += f"{'✅' if i == q['correct_option_id'] else '⚪'} {chr(65+i)}. {o}\n"
+            q_text += f"💡 *Exp:* {q['explanation']}\n\n"
+
+            if len(preview) + len(q_text) < 3800:
+                preview += q_text
+            else:
+                preview += f"*(...आणि इतर {len(data) - idx} प्रश्न थेट चॅनेलवर पोस्ट होतील)*\n"
+                break
+    elif fmt == "mnemonic":
+        preview = f"📋 *Mnemonic Preview*\n🎯 *Target:* `{ch_info['id']}`\n\n{item['data']}"
+    else:
+        preview = f"📋 *Quick Notes Preview*\n🎯 *Target:* `{ch_info['id']}`\n\n{item['data']}"
+
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(types.InlineKeyboardButton("🚀 चॅनलवर पोस्ट करा", callback_data=f"pub_{post_id}"))
+    if fmt == "quiz":
+        markup.add(types.InlineKeyboardButton("✏️ प्रश्न दुरुस्त करा (Manual Edit)", callback_data=f"edt_menu_{post_id}"))
+        markup.add(types.InlineKeyboardButton("🔙 मागे जा (Back / बदल करा)", callback_data="back_to_timer"))
+    else:
+        markup.add(types.InlineKeyboardButton("🔙 मागे जा (Back / बदल करा)", callback_data="back_to_lang"))
+    markup.add(types.InlineKeyboardButton("❌ रद्द करा (Cancel)", callback_data="can_"))
+
+    try:
+        bot.edit_message_text(preview, cid, mid, reply_markup=markup, parse_mode="Markdown")
+    except Exception:
+        bot.send_message(cid, preview, reply_markup=markup, parse_mode="Markdown")
 
 # ------------------------------------------------------------------------------
 # 5. RUN BOT (ROCK SOLID INFINITY POLLING)
