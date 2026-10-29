@@ -61,7 +61,7 @@ def ask_groq(prompt: str) -> str:
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {GROQ_API_KEY.strip()}", "Content-Type": "application/json"}
     payload = {
-        "model": "llama-3.3-70b-versatile",
+        "model": "llama-3.1-8b-instant",
         "messages": [
             {"role": "system", "content": "You are a senior UPSC & MPSC paper setter. Always output strictly formatted exam material."},
             {"role": "user", "content": prompt}
