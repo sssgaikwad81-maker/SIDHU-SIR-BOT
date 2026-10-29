@@ -1,31 +1,14 @@
 """
 Ultimate Multi-Channel AI Bot for Sidhu Sir's Educational Network
 ==================================================================
-Supported Post Types:
-1. 📊 Quiz Poll (1, 5, 10, 25 MCQs with Timer, Explanation & Confetti)
-2. 💡 Mnemonics (स्मरण युक्त्या / Short Tricks with clear breakdown)
-3. 📌 Quick Revision Notes (१ मिनिट रिव्हिजन नोट्स - 5-6 high-yield exam points)
-
-Supported Channels:
-- 🏛️ @polity_quiz_mcq       - UPSC Polity (English)
-- 📜 @history_quiz_mcq      - UPSC History (English)
-- 🌍 @geography_quiz_mcq    - UPSC Geography (English)
-- 📈 @economy_quiz_mcq      - UPSC Economy (English)
-- 🌿 @environment_quiz_mcq  - UPSC Environment (English)
-- 🔬 @science_quiz_mcq      - UPSC Science & Tech (English)
-- 🚩 @sidhu_sir_official    - MPSC GS (Bilingual / Marathi / English)
-
-Other Features:
-- 📸 Photo / Book Page to Quiz & Notes (Gemini Vision)
-- 🎯 Exam Level Selection (UPSC, MPSC Rajyaseva, Combine B&C, Police Bharti)
-- 🌐 Language Selection (Bilingual, Only Marathi, Only English)
-- 🏷️ Auto-Branding on every post (@sidhu_sir_official)
 """
 
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import io
 import json
 import logging
 import os
+import threading
 import time
 import telebot
 from telebot import types
@@ -33,11 +16,31 @@ import google.generativeai as genai
 from PIL import Image
 
 # ==============================================================================
-# 1. CONFIGURATION
+# 0. FREE CLOUD KEEP-ALIVE SERVER (For Render Web Service)
 # ==============================================================================
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY_HERE")
-ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"Sidhu Sir's Quiz Bot is running live 24/7!")
+
+    def log_message(self, format, *args):
+        pass
+
+def start_health_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    server.serve_forever()
+
+threading.Thread(target=start_health_server, daemon=True).start()
+
+# ==============================================================================
+# 1. CONFIGURATION (Your Live Credentials)
+# ==============================================================================
+TELEGRAM_BOT_TOKEN = "9253804253:AAG3NaTU7O4bmwO0hznomU1NKgslOg4JgvU"
+GEMINI_API_KEY = "AQ.Ab8RN6KgyFsfQFkls0DV93sjEaMvGT3mMzYH_2H2QM2ZZpHSEw"
+ADMIN_USER_ID = 0
 
 CHANNELS = {
     "upsc_polity": {
@@ -160,7 +163,7 @@ Format the response beautifully for a Telegram channel post using emojis, bold t
 Structure:
 💡 **विषय / Topic:** ...
 🎯 **शॉर्टकट ट्रिक / Memory Trick:** ...
-🔍 **डिकोडिंग / Breakdown:** ... (bullet points showing how each letter/word maps to facts)
+🔍 **डिकोडिंग / Breakdown:** ...
 📚 **परीक्षेसाठी टीप / Exam Tip:** ...
 """
     model = genai.GenerativeModel("gemini-1.5-flash")
@@ -273,18 +276,15 @@ def show_channel_menu(chat_id: int, message_id: int):
     bot.edit_message_text("👇 **कोणत्या चॅनेलवर पोस्ट करायचे आहे?**", chat_id, message_id, reply_markup=markup, parse_mode="Markdown")
 
 
-# Interactive Callback Flow
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     chat_id = call.message.chat.id
     session = user_sessions.get(chat_id, {})
 
-    # 1. Format Selected
     if call.data.startswith("fmt_"):
         session["format"] = call.data.replace("fmt_", "")
         show_channel_menu(chat_id, call.message.message_id)
 
-    # 2. Channel Selected
     elif call.data.startswith("ch_"):
         channel_key = call.data.replace("ch_", "")
         session["channel_key"] = channel_key
@@ -303,12 +303,10 @@ def handle_callbacks(call):
         else:
             show_language_menu(chat_id, call.message.message_id)
 
-    # 3. Level Selected (for Quiz)
     elif call.data.startswith("lvl_"):
         session["level"] = call.data.replace("lvl_", "")
         show_language_menu(chat_id, call.message.message_id)
 
-    # 4. Language Selected
     elif call.data.startswith("lng_"):
         session["lang"] = call.data.replace("lng_", "")
 
@@ -326,12 +324,10 @@ def handle_callbacks(call):
         else:
             trigger_content_generation(chat_id, call.message.message_id, session)
 
-    # 5. Count Selected (for Quiz)
     elif call.data.startswith("cnt_"):
         session["count"] = int(call.data.replace("cnt_", ""))
         trigger_content_generation(chat_id, call.message.message_id, session)
 
-    # 6. Publish to Channel
     elif call.data.startswith("pub_"):
         item_id = call.data.replace("pub_", "")
         if item_id not in pending_items:
