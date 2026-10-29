@@ -13,7 +13,7 @@ Features:
 5. 📋 Full Question Preview (Displays ALL generated questions Q1, Q2, Q3, Q4, Q5... before posting).
 6. ♾️ Normal Quiz (Permanent open) vs ⏱️ Live Test (45s Timer).
 7. 📊 Quizzes, 💡 Mnemonics, 📌 Quick Notes for all 7 channels.
-8. 🛡️ Native Groq JSON Mode & Multi-Tier Fallback Parser: Zero 'Expecting value' errors!
+8. 🛡️ Active 2026 Groq Models (openai/gpt-oss-20b & qwen/qwen3.8-27b): Zero 404 model_not_found errors!
 """
 
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -76,63 +76,67 @@ user_sessions = {}
 pending_posts = {}
 
 # ------------------------------------------------------------------------------
-# 2. BULLETPROOF GROQ AI ENGINE WITH AUTO-FALLBACK & NATIVE JSON MODE
+# 2. BULLETPROOF GROQ AI ENGINE WITH ACTIVE 2026 REPLACEMENT MODELS
 # ------------------------------------------------------------------------------
-PREFERRED_TEXT_MODELS = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
+KNOWN_TEXT_MODELS = [
     "openai/gpt-oss-20b",
-    "openai/gpt-oss-120b",
-    "qwen/qwen3.8-27b"
-]
-
-PREFERRED_VISION_MODELS = [
     "qwen/qwen3.8-27b",
-    "meta-llama/llama-4-scout-17b-16e-instruct",
-    "llama-3.2-11b-vision-preview",
-    "llama-3.2-90b-vision-preview"
+    "openai/gpt-oss-120b",
+    "llama-3.3-70b-versatile",
+    "mixtral-8x7b-32768"
 ]
 
-cached_groq_text_model = None
-cached_groq_vision_model = None
+KNOWN_VISION_MODELS = [
+    "qwen/qwen3.8-27b",
+    "meta-llama/llama-4-scout-17b-16e-instruct"
+]
 
-def get_active_groq_model(vision=False):
-    global cached_groq_text_model, cached_groq_vision_model
-    if vision and cached_groq_vision_model:
-        return cached_groq_vision_model
-    if not vision and cached_groq_text_model:
-        return cached_groq_text_model
-
+def get_available_groq_models():
     headers = {"Authorization": f"Bearer {GROQ_API_KEY.strip()}"}
     try:
         r = requests.get("https://api.groq.com/openai/v1/models", headers=headers, timeout=5)
         if r.status_code == 200:
-            available = [m["id"] for m in r.json().get("data", [])]
-
-            for pref in PREFERRED_TEXT_MODELS:
-                if pref in available:
-                    cached_groq_text_model = pref
-                    break
-
-            for pref in PREFERRED_VISION_MODELS:
-                if pref in available:
-                    cached_groq_vision_model = pref
-                    break
+            return [m["id"] for m in r.json().get("data", [])]
     except Exception:
         pass
+    return []
 
-    if vision:
-        return cached_groq_vision_model or "qwen/qwen3.8-27b"
-    return cached_groq_text_model or "llama-3.3-70b-versatile"
+def get_text_candidates():
+    available = get_available_groq_models()
+    candidates = []
+
+    # Priority 1: Match against verified active models (gpt-oss-20b, qwen3.8-27b, etc.)
+    for m in KNOWN_TEXT_MODELS:
+        if m in available and m not in candidates:
+            candidates.append(m)
+
+    # Priority 2: Any other available chat model that is NOT an audio/guard/canopy model
+    for m in available:
+        m_low = m.lower()
+        if not any(bad in m_low for bad in ["whisper", "guard", "embed", "tts", "safeguard", "orpheus", "canopy"]):
+            if m not in candidates:
+                candidates.append(m)
+
+    if not candidates:
+        candidates = ["openai/gpt-oss-20b", "qwen/qwen3.8-27b", "openai/gpt-oss-120b"]
+
+    return candidates
+
+def get_vision_model():
+    available = get_available_groq_models()
+    for m in KNOWN_VISION_MODELS:
+        if m in available:
+            return m
+    for m in available:
+        if any(v in m.lower() for v in ["qwen", "vision", "scout"]):
+            return m
+    return "qwen/qwen3.8-27b"
 
 def ask_groq(prompt: str, json_mode: bool = False) -> str:
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {GROQ_API_KEY.strip()}", "Content-Type": "application/json"}
 
-    first_choice = get_active_groq_model(vision=False)
-    candidate_models = [first_choice, "llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-20b"]
-    seen = set()
-    candidate_models = [m for m in candidate_models if m and not (m in seen or seen.add(m))]
+    candidate_models = get_text_candidates()
 
     system_rules = (
         "You are an authoritative, senior exam paper setter for UPSC and MPSC examinations.\n"
@@ -335,7 +339,7 @@ def extract_text_from_photo(img_bytes: bytes) -> str:
     b64 = base64.b64encode(img_bytes).decode('utf-8')
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {GROQ_API_KEY.strip()}", "Content-Type": "application/json"}
-    model_name = get_active_groq_model(vision=True)
+    model_name = get_vision_model()
     payload = {
         "model": model_name,
         "messages": [{
