@@ -385,7 +385,9 @@ def extract_single_mcq_block(block: str) -> dict:
                         "question": q_clean,
                         "options": clean_opts,
                         "correct_option_id": corr_idx if 0 <= corr_idx <= 3 else 0,
-                        "explanation": exp
+                        "explanation": exp,
+                        "has_detected_answer": True if ans_m else False,
+                        "has_detected_exp": True if exp_m else False
                     }
     return None
 
@@ -447,6 +449,25 @@ def parse_all_document_mcqs(text: str) -> list:
         if parsed:
             mcqs.append(parsed)
     return mcqs
+
+def extract_answer_key_dict(text: str) -> dict:
+    """Extracts answer key mappings (e.g. 1. A, 2. C, 3. B) from document text."""
+    key_dict = {}
+    ans_key_m = re.search(r"(?:ANSWER\s*KEY|उत्तरपत्रिका|उत्तरांची\s*सूची|ANSWERS|KEYS?)\s*[:\-]?\s*(.+)", text, re.IGNORECASE | re.DOTALL)
+    search_text = ans_key_m.group(1) if ans_key_m else text
+    pairs = re.findall(r"(?:Q(?:uestion)?\s*)?(\d+)[\.:\-\s]+[\(\[]?\s*([A-Da-d१-४1-4])[\)\]]?", search_text)
+    for q_num, ans_ch in pairs:
+        try:
+            q_idx = int(q_num) - 1
+            if ans_ch in "1234":
+                key_dict[q_idx] = int(ans_ch) - 1
+            elif ans_ch in "१२३४":
+                key_dict[q_idx] = "१२३४".index(ans_ch)
+            elif ans_ch.upper() in "ABCD":
+                key_dict[q_idx] = ord(ans_ch.upper()) - ord("A")
+        except Exception:
+            pass
+    return key_dict
 
 def parse_plain_text_mcqs(text: str) -> list:
     return parse_all_document_mcqs(text)
@@ -1219,11 +1240,65 @@ def run_content_generation(cid, mid, sess):
             lvl = sess.get("lvl", "combine")
             all_mcqs = []
 
-            # Strategy A: If As-Is mode, try instant local regex extraction directly from full text first!
+            # Strategy A: If As-Is mode, extract verbatim and solve any missing answers/explanations via AI!
             if qmode == "as_is":
                 direct_extracted = parse_all_document_mcqs(topic)
-                if len(direct_extracted) >= cnt:
-                    all_mcqs = direct_extracted[:cnt]
+                if direct_extracted:
+                    key_dict = extract_answer_key_dict(topic)
+                    for i, q in enumerate(direct_extracted):
+                        if i in key_dict:
+                            q["correct_option_id"] = key_dict[i]
+                            q["has_detected_answer"] = True
+
+                    # Set language-aware default explanation
+                    def_exp = "Correct answer as per standard reference notes." if lang == "english" else "संदर्भ नोट्सनुसार अचूक उत्तर."
+                    for q in direct_extracted:
+                        if not q.get("has_detected_exp"):
+                            q["explanation"] = def_exp
+
+                    # If questions in document lacked inline answers, auto-solve via AI in target language!
+                    unsolved = [q for q in direct_extracted[:cnt] if not q.get("has_detected_answer")]
+                    if unsolved:
+                        try:
+                            bot.edit_message_text(
+                                f"⏳ **प्रश्नांची खरी उत्तरे व स्पष्टीकरणे पडताळत आहे...**",
+                                cid, mid, parse_mode="Markdown"
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            solve_batches = get_batch_sizes(len(unsolved), max_per_batch=12)
+                            curr_idx = 0
+                            for _, _, b_sz in solve_batches:
+                                batch_items = unsolved[curr_idx:curr_idx + b_sz]
+                                solve_payload = [
+                                    {"id": idx, "question": it["question"][:400], "options": it["options"]}
+                                    for idx, it in enumerate(batch_items)
+                                ]
+                                solve_prompt = (
+                                    f"You are a senior exam paper evaluator.\n"
+                                    f"For each MCQ below, determine the strictly correct option index (0 for first option, 1 for second, 2 for third, 3 for fourth) and provide a concise 1-sentence factual explanation in {lang_str}.\n"
+                                    f"Input MCQs:\n{json.dumps(solve_payload)}\n\n"
+                                    f"Output strictly a JSON list of objects: [{{\"id\": 0, \"correct_option_id\": 1, \"explanation\": \"...\"}}]"
+                                )
+                                solve_res = ask_groq(solve_prompt, json_mode=True)
+                                solve_data = parse_json_mcqs(solve_res)
+                                for s_item in solve_data:
+                                    s_id = s_item.get("id")
+                                    if s_id is not None and 0 <= s_id < len(batch_items):
+                                        target_q = batch_items[s_id]
+                                        c_id = s_item.get("correct_option_id", 0)
+                                        target_q["correct_option_id"] = c_id if 0 <= c_id <= 3 else 0
+                                        target_q["has_detected_answer"] = True
+                                        s_exp = s_item.get("explanation", "").strip()
+                                        if s_exp:
+                                            target_q["explanation"] = s_exp[:140]
+                                curr_idx += b_sz
+                        except Exception as se:
+                            logging.warning(f"AI Auto-solver fallback: {se}")
+
+                    if len(direct_extracted) >= cnt:
+                        all_mcqs = direct_extracted[:cnt]
 
             # Strategy B: If not enough questions or AI Generate mode, run safe batched AI calls
             if len(all_mcqs) < cnt:
