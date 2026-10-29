@@ -38,7 +38,7 @@ threading.Thread(target=start_health_server, daemon=True).start()
 # ==============================================================================
 # 1. CONFIGURATION (Your Live Credentials)
 # ==============================================================================
-TELEGRAM_BOT_TOKEN = "9253804253:AAG3NaTU7O4bmwO0hznomU1NKgslOg4JgvU"
+TELEGRAM_BOT_TOKEN = "9253804253:AAG3NaTU704bmw00hznomU1NKgsl0g4JgvU"
 GEMINI_API_KEY = "AQ.Ab8RN6KgyFsfQFkls0DV93sjEaMvGT3mMzYH_2H2QM2ZZpHSEw"
 ADMIN_USER_ID = 0
 
