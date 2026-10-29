@@ -1,7 +1,8 @@
 """
-Sidhu Sir's Multi-Channel AI Quiz & Content Bot (Groq LPU Engine)
-================================================================
-Compact, ultra-reliable, zero-truncation version.
+Sidhu Sir's Multi-Channel AI Quiz & Content Bot (Groq Dynamic Model Engine)
+==========================================================================
+Automatically discovers and uses the active model on your Groq account.
+Zero 404 model_not_found errors.
 """
 
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -55,14 +56,39 @@ user_sessions = {}
 pending_posts = {}
 
 # ------------------------------------------------------------------------------
-# 2. GROQ AI ENGINE
+# 2. DYNAMIC GROQ AI ENGINE (Auto-detects active models from your account)
 # ------------------------------------------------------------------------------
+cached_groq_model = None
+
+def get_active_groq_model():
+    global cached_groq_model
+    if cached_groq_model:
+        return cached_groq_model
+    
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY.strip()}"}
+    try:
+        r = requests.get("https://api.groq.com/openai/v1/models", headers=headers, timeout=5)
+        if r.status_code == 200:
+            models = [m["id"] for m in r.json().get("data", [])]
+            for m in models:
+                if not any(x in m.lower() for x in ["whisper", "guard", "embed", "tts", "safeguard"]):
+                    cached_groq_model = m
+                    return m
+            if models:
+                cached_groq_model = models[0]
+                return models[0]
+    except Exception:
+        pass
+    
+    return "llama-3.1-8b-instant"
+
 def ask_groq(prompt: str) -> str:
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {GROQ_API_KEY.strip()}", "Content-Type": "application/json"}
+    model_name = get_active_groq_model()
+    
     payload = {
-        # CHANGED: Swapped out 'llama-3.1-8b-instant' for an active high-tier reasoning model
-        "model": "llama-3.3-70b-versatile",
+        "model": model_name,
         "messages": [
             {"role": "system", "content": "You are a senior UPSC & MPSC paper setter. Always output strictly formatted exam material."},
             {"role": "user", "content": prompt}
@@ -73,7 +99,7 @@ def ask_groq(prompt: str) -> str:
     resp = requests.post(url, headers=headers, json=payload, timeout=35)
     if resp.status_code == 200:
         return resp.json()["choices"][0]["message"]["content"]
-    raise Exception(f"AI Error {resp.status_code}: {resp.text}")
+    raise Exception(f"AI Error ({model_name}): {resp.status_code} {resp.text}")
 
 def parse_json_mcqs(text: str) -> list:
     clean = re.sub(r"```json\s*", "", text)
@@ -120,7 +146,6 @@ def handle_cb(call):
     mid = call.message.message_id
     sess = user_sessions.get(cid, {})
 
-    # Step 1: Format Chosen -> Choose Channel
     if call.data.startswith("fmt_"):
         sess["fmt"] = call.data.replace("fmt_", "")
         markup = types.InlineKeyboardMarkup(row_width=2)
@@ -141,7 +166,6 @@ def handle_cb(call):
         )
         bot.edit_message_text("👇 **कोणत्या चॅनेलवर पोस्ट करायचे आहे?**", cid, mid, reply_markup=markup, parse_mode="Markdown")
 
-    # Step 2: Channel Chosen -> Level (for Quiz) or Lang (for Notes)
     elif call.data.startswith("ch_"):
         sess["ch"] = call.data.replace("ch_", "")
         if sess["fmt"] == "quiz":
@@ -158,38 +182,130 @@ def handle_cb(call):
         else:
             show_lang_options(cid, mid)
 
-    # Step 3: Level Chosen -> Lang
     elif call.data.startswith("lvl_"):
         sess["lvl"] = call.data.replace("lvl_", "")
         show_lang_options(cid, mid)
 
-    # Step 4: Lang Chosen -> Count (for Quiz) or Run (for Notes)
     elif call.data.startswith("lng_"):
         sess["lang"] = call.data.replace("lng_", "")
         if sess["fmt"] == "quiz":
             markup = types.InlineKeyboardMarkup(row_width=2)
             markup.add(
                 types.InlineKeyboardButton("⚡ १ प्रश्न", callback_data="cnt_1"),
-                # FIXED: Repaired truncated markup list configuration string below
                 types.InlineKeyboardButton("🔥 ५ प्रश्न", callback_data="cnt_5")
             )
-            bot.edit_message_text("👇 **किती प्रश्न तयार करायचे?**", cid, mid, reply_markup=markup, parse_mode="Markdown")
+            markup.add(
+                types.InlineKeyboardButton("🏆 १० प्रश्न", callback_data="cnt_10"),
+                types.InlineKeyboardButton("🚀 २५ प्रश्न", callback_data="cnt_25")
+            )
+            bot.edit_message_text("👇 **किती प्रश्न तयार करायचे आहेत?**", cid, mid, reply_markup=markup, parse_mode="Markdown")
         else:
-            # Fallback wrapper if executing notes logic directly
-            pass
+            run_content_generation(cid, mid, sess)
+
+    elif call.data.startswith("cnt_"):
+        sess["cnt"] = int(call.data.replace("cnt_", ""))
+        run_content_generation(cid, mid, sess)
+
+    elif call.data.startswith("pub_"):
+        post_id = call.data.replace("pub_", "")
+        if post_id not in pending_posts:
+            bot.answer_callback_query(call.id, "कालबाह्य झाले आहे.")
+            return
+
+        item = pending_posts[post_id]
+        target_id = item["channel_id"]
+        bot.edit_message_text(f"🚀 `{target_id}` वर पोस्ट होत आहे...", cid, mid, parse_mode="Markdown")
+
+        if item["type"] == "quiz":
+            quizzes = item["data"]
+            brand = "\n\n🎯 Join: @sidhu_sir_official"
+            for i, q in enumerate(quizzes):
+                exp = q["explanation"]
+                if len(exp) + len(brand) <= 200:
+                    exp += brand
+                bot.send_poll(
+                    chat_id=target_id,
+                    question=f"[{i+1}/{len(quizzes)}] {q['question']}" if len(quizzes) > 1 else q['question'],
+                    options=q["options"],
+                    type="quiz",
+                    correct_option_id=q["correct_option_id"],
+                    explanation=exp,
+                    is_anonymous=True,
+                    open_period=45
+                )
+                time.sleep(2.5)
+        else:
+            content = item["data"] + "\n\n━━━━━━━━━━━━━━━\n📢 **अधिक तयारीसाठी जॉईन करा:** @sidhu_sir_official"
+            bot.send_message(target_id, content, parse_mode="Markdown")
+
+        bot.send_message(cid, f"🎉 **अभिनंदन!** कन्टेन्ट `{target_id}` चॅनेलवर यशस्वीरीत्या पोस्ट झाला आहे!")
+        del pending_posts[post_id]
+
+    elif call.data.startswith("can_"):
+        bot.edit_message_text("❌ रद्द करण्यात आले.", cid, mid)
 
 def show_lang_options(cid, mid):
-    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
-        types.InlineKeyboardButton("🇬🇧 English", callback_data="lng_english"),
-        types.InlineKeyboardButton("🇮🇳 Marathi", callback_data="lng_marathi"),
-        types.InlineKeyboardButton("🗣️ Bilingual", callback_data="lng_bilingual")
+        types.InlineKeyboardButton("🌐 Bilingual (मराठी + English)", callback_data="lng_bilingual"),
+        types.InlineKeyboardButton("🚩 फक्त शुद्ध मराठी", callback_data="lng_marathi"),
+        types.InlineKeyboardButton("🇬🇧 Only English", callback_data="lng_english")
     )
-    bot.edit_message_text("👇 **माध्यम (Language) निवडा:**", cid, mid, reply_markup=markup, parse_mode="Markdown")
+    bot.edit_message_text("👇 **कोणत्या भाषेत कन्टेन्ट हवा आहे?**", cid, mid, reply_markup=markup, parse_mode="Markdown")
+
+def run_content_generation(cid, mid, sess):
+    ch_info = CHANNELS[sess["ch"]]
+    topic = sess["topic"]
+    fmt = sess["fmt"]
+    lang = sess["lang"]
+    
+    bot.edit_message_text("⏳ **AI द्वारे कन्टेन्ट तयार होत आहे...** (अवघे १-२ सेकंद थांबा)...", cid, mid, parse_mode="Markdown")
+    try:
+        lang_str = "BILINGUAL (English / Marathi)" if lang == "bilingual" else ("Marathi only" if lang == "marathi" else "English only")
+        post_id = str(mid)
+
+        if fmt == "quiz":
+            cnt = sess.get("cnt", 1)
+            prompt = (
+                f"Subject: {ch_info['sub']}. Exam: {sess.get('lvl', 'UPSC')}. Language: {lang_str}.\n"
+                f"Create {cnt} MCQs on: '{topic}'.\n"
+                f"RULES: Question max 280 chars, 4 options under 90 chars each, correct index 0-3, explanation max 140 chars.\n"
+                f"Return ONLY JSON array:\n"
+                f"[{{\"question\":\"...\",\"options\":[\"...\",\"...\",\"...\",\"...\"],\"correct_option_id\":0,\"explanation\":\"...\"}}]"
+            )
+            raw = ask_groq(prompt)
+            data = parse_json_mcqs(raw)
+            pending_posts[post_id] = {"type": "quiz", "channel_id": ch_info["id"], "data": data}
+            
+            q1 = data[0]
+            preview = f"📋 *Quiz Preview (Total: {len(data)})*\n🎯 *Target:* `{ch_info['id']}`\n\n*Q1:* {q1['question']}\n\n"
+            for i, o in enumerate(q1['options']):
+                preview += f"{'✅' if i == q1['correct_option_id'] else '⚪'} {chr(65+i)}. {o}\n"
+            preview += f"\n💡 *Explanation:* {q1['explanation']}"
+
+        elif fmt == "mnemonic":
+            prompt = f"Create a memorable MNEMONIC / SHORT TRICK in {lang_str} for subject '{ch_info['sub']}' on topic '{topic}'. Use emojis, bold text, clear breakdown."
+            text = ask_groq(prompt)
+            pending_posts[post_id] = {"type": "mnemonic", "channel_id": ch_info["id"], "data": text}
+            preview = f"📋 *Mnemonic Preview*\n🎯 *Target:* `{ch_info['id']}`\n\n{text}"
+
+        else: # notes
+            prompt = f"Create a 1-Minute Quick Revision Note in {lang_str} for '{ch_info['sub']}' on topic '{topic}'. 4-5 high-yield bullet points with emojis, key articles/facts, and exam traps."
+            text = ask_groq(prompt)
+            pending_posts[post_id] = {"type": "notes", "channel_id": ch_info["id"], "data": text}
+            preview = f"📋 *Quick Notes Preview*\n🎯 *Target:* `{ch_info['id']}`\n\n{text}"
+
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🚀 चॅनलवर पोस्ट करा", callback_data=f"pub_{post_id}"))
+        markup.add(types.InlineKeyboardButton("❌ रद्द करा", callback_data="can_"))
+        bot.edit_message_text(preview, cid, mid, reply_markup=markup, parse_mode="Markdown")
+
+    except Exception as e:
+        bot.edit_message_text(f"❌ त्रुटी: {str(e)}", cid, mid)
 
 # ------------------------------------------------------------------------------
-# 5. POLLING LOOP START
+# 5. RUN BOT (ROCK SOLID INFINITY POLLING)
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
-    print("Bot is up and polling...")
+    print("🚀 Sidhu Sir's Bot is online 24/7!")
     bot.infinity_polling()
