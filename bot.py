@@ -14,6 +14,7 @@ Features:
 6. ♾️ Normal Quiz (Permanent open) vs ⏱️ Live Test (45s Timer).
 7. 📊 Quizzes, 💡 Mnemonics, 📌 Quick Notes for all 7 channels.
 8. 🛡️ Active 2026 Groq Models (openai/gpt-oss-20b & qwen/qwen3.8-27b): Zero 404 model_not_found errors!
+9. 🔁 Rock-solid 409 Conflict auto-recovery loop: Never exits on redeploy handover!
 """
 
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -756,8 +757,20 @@ def render_preview_message(cid, mid, post_id, sess):
         bot.send_message(cid, preview, reply_markup=markup, parse_mode="Markdown")
 
 # ------------------------------------------------------------------------------
-# 6. RUN BOT (ROCK SOLID INFINITY POLLING)
+# 6. RUN BOT (ROCK SOLID INFINITY POLLING & 409 CONFLICT HANDLER)
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     print("🚀 Sidhu Sir's Bot is online 24/7!")
-    bot.infinity_polling(timeout=20, long_polling_timeout=10, skip_pending=True)
+    while True:
+        try:
+            bot.polling(none_stop=True, timeout=30, long_polling_timeout=20, skip_pending=True)
+        except telebot.apihelper.ApiTelegramException as e:
+            if getattr(e, "error_code", None) == 409 or "409" in str(e):
+                print("⚠️ Telegram 409 Conflict: जुनी प्रोसेस बंद होण्याची वाट पाहत आहे... (10 सेकंदात पुन्हा कनेक्ट होईल)")
+                time.sleep(10)
+            else:
+                print(f"⚠️ Telegram API त्रुटी: {e}. 5 सेकंदात पुन्हा प्रयत्न करत आहे...")
+                time.sleep(5)
+        except Exception as e:
+            print(f"⚠️ Polling त्रुटी: {e}. 5 सेकंदात पुन्हा प्रयत्न करत आहे...")
+            time.sleep(5)
