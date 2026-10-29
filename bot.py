@@ -1,6 +1,12 @@
 """
 Sidhu Sir's Ultimate Multi-Channel AI Bot (Strict Accuracy + Vision + PDF + Back Navigation)
 =============================================================================================
+Features:
+1. Strict Historical Accuracy Guardrails (Mahad Satyagraha = Dr. B.R. Ambedkar, etc.).
+2. Handles Text Topics, Book Page Photos (Vision AI with Qwen 3.8 27B), and PDFs.
+3. 🔙 Back button navigation on every step.
+4. ♾️ Normal Quiz (Permanent open) vs ⏱️ Live Test (45s Timer).
+5. 📊 Quizzes, 💡 Mnemonics, 📌 Quick Notes for all 7 channels.
 """
 
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -14,7 +20,12 @@ import time
 import telebot
 from telebot import types
 import requests
-import pypdf
+
+# Graceful PDF support (Prevents bot crash if pypdf is not yet installed in requirements.txt)
+try:
+    import pypdf
+except ImportError:
+    pypdf = None
 
 # ------------------------------------------------------------------------------
 # 0. FREE CLOUD KEEP-ALIVE SERVER (For Render Web Service)
@@ -58,42 +69,52 @@ pending_posts = {}
 # ------------------------------------------------------------------------------
 # 2. DYNAMIC GROQ AI ENGINE WITH STRICT FACTUAL GUARDRAILS
 # ------------------------------------------------------------------------------
-cached_groq_model = None
+cached_groq_text_model = None
+cached_groq_vision_model = None
 
-def get_active_groq_model():
-    global cached_groq_model
-    if cached_groq_model:
-        return cached_groq_model
+def get_active_groq_model(vision=False):
+    global cached_groq_text_model, cached_groq_vision_model
+    if vision and cached_groq_vision_model:
+        return cached_groq_vision_model
+    if not vision and cached_groq_text_model:
+        return cached_groq_text_model
+
     headers = {"Authorization": f"Bearer {GROQ_API_KEY.strip()}"}
     try:
         r = requests.get("https://api.groq.com/openai/v1/models", headers=headers, timeout=5)
         if r.status_code == 200:
             models = [m["id"] for m in r.json().get("data", [])]
             for m in models:
+                if any(v in m.lower() for v in ["qwen", "vision", "scout"]):
+                    cached_groq_vision_model = m
+                    break
+            for m in models:
                 if not any(x in m.lower() for x in ["whisper", "guard", "embed", "tts", "safeguard"]):
-                    cached_groq_model = m
-                    return m
-            if models:
-                cached_groq_model = models[0]
-                return models[0]
+                    cached_groq_text_model = m
+                    break
     except Exception:
         pass
-    return "llama-3.1-8b-instant"
+
+    if vision:
+        return cached_groq_vision_model or "qwen/qwen3.8-27b"
+    return cached_groq_text_model or "llama-3.1-8b-instant"
 
 def ask_groq(prompt: str) -> str:
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {GROQ_API_KEY.strip()}", "Content-Type": "application/json"}
-    model_name = get_active_groq_model()
+    model_name = get_active_groq_model(vision=False)
     
     system_rules = (
         "You are an authoritative, senior exam paper setter for UPSC and MPSC examinations.\n"
         "STRICT FACTUAL ACCURACY RULES (CRITICAL):\n"
         "1. Never hallucinate or confuse historical figures, leaders, or events.\n"
         "2. For Maharashtra & Indian History:\n"
-        "   - Mahad Satyagraha (20 March 1927), Kalaram Temple Satyagraha, Bahishkrit Hitakarini Sabha, Mooknayak, and Manusmriti Dahan are led strictly by Dr. B.R. Ambedkar (NOT Mahatma Gandhi).\n"
+        "   - Mahad Satyagraha (20 March 1927), Chavdar Tale, Kalaram Temple Satyagraha (1930), Bahishkrit Hitakarini Sabha (1924), Mooknayak, and Manusmriti Dahan (25 Dec 1927) are led strictly by Dr. B.R. Ambedkar (NOT Mahatma Gandhi).\n"
         "   - Satyashodhak Samaj is Mahatma Jyotirao Phule.\n"
-        "   - Shahu Maharaj is associated with reservation in Kolhapur, Satya Shodhak support, and Vedokta.\n"
-        "3. Base every fact strictly on authentic historical and constitutional consensus. Output exact truth only."
+        "   - Rajarshi Chhatrapati Shahu Maharaj is associated with reservation in Kolhapur (1902), Satya Shodhak support, and Vedokta controversy.\n"
+        "   - Salt Satyagraha / Dandi March (1930), Champaran (1917), Kheda (1918), Non-Cooperation (1920), Quit India (1942) are Mahatma Gandhi.\n"
+        "   - Do NOT associate Mahatma Gandhi with Mahad Chavdar Tale Satyagraha.\n"
+        "3. Every answer and explanation must cite authentic dates, places, and historical facts without error.\n"
     )
     
     payload = {
@@ -141,14 +162,13 @@ def handle_text(msg):
     user_sessions[msg.chat.id] = {"topic": topic, "source_type": "text"}
     show_format_menu(msg.chat.id, topic)
 
-# 2. Book Photo Input (Vision OCR)
+# 2. Book Photo Input (Vision AI)
 @bot.message_handler(content_types=['photo'])
 def handle_photo(msg):
-    status = bot.reply_to(msg, "📸 *पुस्तकाचा फोटो मिळाला!* पान स्कॅन होत आहे...", parse_mode="Markdown")
+    status = bot.reply_to(msg, "📸 *पुस्तकाचा फोटो मिळाला!* AI पान वाचत आहे...", parse_mode="Markdown")
     try:
         file_info = bot.get_file(msg.photo[-1].file_id)
         img_bytes = bot.download_file(file_info.file_path)
-        
         extracted_text = extract_text_from_photo(img_bytes)
         bot.delete_message(msg.chat.id, status.message_id)
         
@@ -162,12 +182,13 @@ def extract_text_from_photo(img_bytes: bytes) -> str:
     b64 = base64.b64encode(img_bytes).decode('utf-8')
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {GROQ_API_KEY.strip()}", "Content-Type": "application/json"}
+    model_name = get_active_groq_model(vision=True)
     payload = {
-        "model": "llama-3.2-11b-vision-preview",
+        "model": model_name,
         "messages": [{
             "role": "user",
             "content": [
-                {"type": "text", "text": "Transcribe and extract all study notes, key historical facts, and educational content from this book page exactly as written:"},
+                {"type": "text", "text": "Extract and transcribe all educational study notes, facts, and key concepts from this textbook page accurately in Marathi/English:"},
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
             ]
         }],
@@ -177,14 +198,18 @@ def extract_text_from_photo(img_bytes: bytes) -> str:
     resp = requests.post(url, headers=headers, json=payload, timeout=40)
     if resp.status_code == 200:
         return resp.json()["choices"][0]["message"]["content"]
-    return "Scanned Textbook Page Notes"
+    raise Exception(f"Vision API Error ({model_name}): {resp.status_code} {resp.text[:100]}")
 
 # 3. PDF Document Input
 @bot.message_handler(content_types=['document'])
 def handle_doc(msg):
-    fname = msg.document.file_name.lower()
+    fname = msg.document.file_name.lower() if msg.document.file_name else "file.pdf"
     if not fname.endswith('.pdf'):
         bot.reply_to(msg, "कृपया केवळ PDF फाईल किंवा पुस्तकाचा फोटो पाठवा.")
+        return
+
+    if pypdf is None:
+        bot.reply_to(msg, "⚠️ PDF वाचण्यासाठी GitHub वरील `requirements.txt` मध्ये `pypdf` असणे आवश्यक आहे.\n\n📸 तोपर्यंत तुम्ही **पुस्तकाच्या पानाचा थेट फोटो** पाठवू शकता, AI फोटो अचूक वाचून प्रश्न बनवेल!")
         return
 
     status = bot.reply_to(msg, f"📄 *PDF मिळाली:* `{fname}`\nमजकूर वाचत आहे...", parse_mode="Markdown")
@@ -192,16 +217,17 @@ def handle_doc(msg):
         file_info = bot.get_file(msg.document.file_id)
         pdf_bytes = bot.download_file(file_info.file_path)
         
+        # Read text from PDF
         reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
         extracted = ""
-        for page in reader.pages[:5]:
+        for page in reader.pages[:5]:  # Read first 5 pages
             t = page.extract_text()
             if t:
                 extracted += t + "\n"
                 
         bot.delete_message(msg.chat.id, status.message_id)
         if not extracted.strip():
-            bot.send_message(msg.chat.id, "⚠️ या PDF मधून मजकूर काढता आला नाही. कृपया पुस्तकाचा फोटो काढून पाठवा.")
+            bot.send_message(msg.chat.id, "⚠️ या PDF मधून टेक्स्ट काढता आले नाही (कदाचित ही स्कॅन केलेली इमेज PDF असावी). कृपया पानाचा थेट फोटो काढून पाठवा.")
             return
 
         user_sessions[msg.chat.id] = {"topic": extracted[:2000], "source_type": "pdf"}
@@ -232,6 +258,7 @@ def handle_cb(call):
     mid = call.message.message_id
     sess = user_sessions.get(cid, {})
 
+    # Step 1: Format Chosen -> Choose Channel
     if call.data.startswith("fmt_"):
         sess["fmt"] = call.data.replace("fmt_", "")
         show_channel_menu(cid, mid)
@@ -239,6 +266,7 @@ def handle_cb(call):
     elif call.data == "back_to_fmt":
         show_format_menu(cid, sess.get("topic", "विषय")[:60], mid)
 
+    # Step 2: Channel Chosen -> Level (for Quiz) or Lang (for Notes)
     elif call.data.startswith("ch_"):
         sess["ch"] = call.data.replace("ch_", "")
         if sess.get("fmt") == "quiz":
@@ -249,6 +277,7 @@ def handle_cb(call):
     elif call.data == "back_to_ch":
         show_channel_menu(cid, mid)
 
+    # Step 3: Level Chosen -> Lang
     elif call.data.startswith("lvl_"):
         sess["lvl"] = call.data.replace("lvl_", "")
         show_lang_menu(cid, mid)
@@ -259,6 +288,7 @@ def handle_cb(call):
         else:
             show_channel_menu(cid, mid)
 
+    # Step 4: Lang Chosen -> Count (for Quiz) or Run (for Notes)
     elif call.data.startswith("lng_"):
         sess["lang"] = call.data.replace("lng_", "")
         if sess.get("fmt") == "quiz":
@@ -269,6 +299,7 @@ def handle_cb(call):
     elif call.data == "back_to_lang":
         show_lang_menu(cid, mid)
 
+    # Step 5: Count Chosen -> Choose Mode (Normal vs Live Timer)
     elif call.data.startswith("cnt_"):
         sess["cnt"] = int(call.data.replace("cnt_", ""))
         show_timer_menu(cid, mid)
@@ -276,11 +307,13 @@ def handle_cb(call):
     elif call.data == "back_to_cnt":
         show_count_menu(cid, mid)
 
+    # Step 6: Mode Selection (Timer vs Normal) -> Run Generation
     elif call.data.startswith("tmr_"):
         t_val = call.data.replace("tmr_", "")
         sess["timer"] = 45 if t_val == "45" else None
         run_content_generation(cid, mid, sess)
 
+    # Step 7: Publish to Target Channel
     elif call.data.startswith("pub_"):
         post_id = call.data.replace("pub_", "")
         if post_id not in pending_posts:
@@ -408,7 +441,7 @@ def run_content_generation(cid, mid, sess):
                 f"Source Topic / Material:\n'{topic}'\n\n"
                 f"RULES (STRICT):\n"
                 f"1. Generate exactly {cnt} MCQs strictly based on authentic historical/constitutional facts.\n"
-                f"2. Ensure zero confusion between historical figures (e.g. Mahad Satyagraha is strictly Dr. B.R. Ambedkar, NOT Mahatma Gandhi).\n"
+                f"2. Ensure zero confusion between historical figures (e.g. Mahad Satyagraha is strictly Dr. B.R. Ambedkar).\n"
                 f"3. Question max 280 chars, 4 options under 90 chars each, correct index 0-3, explanation max 140 chars.\n"
                 f"Return ONLY valid JSON array:\n"
                 f"[{{\"question\":\"...\",\"options\":[\"...\",\"...\",\"...\",\"...\"],\"correct_option_id\":0,\"explanation\":\"...\"}}]"
@@ -434,13 +467,13 @@ def run_content_generation(cid, mid, sess):
             preview += f"\n💡 *Explanation:* {q1['explanation']}"
 
         elif fmt == "mnemonic":
-            prompt = f"Create a memorable MNEMONIC / SHORT TRICK in {lang_str} for subject '{ch_info['sub']}' on topic '{topic}'. Ensure 100% historical accuracy (Mahad Satyagraha = Dr. Ambedkar). Use emojis, bold text, clear breakdown."
+            prompt = f"Create a memorable MNEMONIC / SHORT TRICK in {lang_str} for subject '{ch_info['sub']}' on topic '{topic}'. Ensure 100% historical accuracy. Use emojis, bold text, clear breakdown."
             text = ask_groq(prompt)
             pending_posts[post_id] = {"type": "mnemonic", "channel_id": ch_info["id"], "data": text}
             preview = f"📋 *Mnemonic Preview*\n🎯 *Target:* `{ch_info['id']}`\n\n{text}"
 
         else: # notes
-            prompt = f"Create a 1-Minute Quick Revision Note in {lang_str} for '{ch_info['sub']}' on topic '{topic}'. Ensure strict historical accuracy (Mahad Satyagraha = Dr. Ambedkar). 4-5 high-yield bullet points with emojis, key articles/facts, and exam traps."
+            prompt = f"Create a 1-Minute Quick Revision Note in {lang_str} for '{ch_info['sub']}' on topic '{topic}'. Ensure strict historical accuracy. 4-5 high-yield bullet points with emojis, key articles/facts, and exam traps."
             text = ask_groq(prompt)
             pending_posts[post_id] = {"type": "notes", "channel_id": ch_info["id"], "data": text}
             preview = f"📋 *Quick Notes Preview*\n🎯 *Target:* `{ch_info['id']}`\n\n{text}"
