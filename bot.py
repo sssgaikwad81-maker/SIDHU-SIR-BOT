@@ -472,6 +472,33 @@ def extract_answer_key_dict(text: str) -> dict:
 def parse_plain_text_mcqs(text: str) -> list:
     return parse_all_document_mcqs(text)
 
+def parse_solve_json(text: str) -> list:
+    """Parses AI auto-solver responses with keys like answers, solutions, results."""
+    if not text:
+        return []
+    cleaned = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.MULTILINE)
+    cleaned = re.sub(r"\s*```$", "", cleaned.strip(), flags=re.MULTILINE).strip()
+    try:
+        data = json.loads(cleaned)
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            for k in ["answers", "solutions", "results", "questions", "data", "items"]:
+                if k in data and isinstance(data[k], list):
+                    return data[k]
+            if "correct_option_id" in data:
+                return [data]
+    except Exception:
+        pass
+
+    arr_m = re.search(r"\[\s*\{.*\}\s*\]", text, re.DOTALL)
+    if arr_m:
+        try:
+            return json.loads(arr_m.group(0))
+        except Exception:
+            pass
+    return []
+
 def parse_json_mcqs(text: str) -> list:
     if not text:
         raise Exception("AI कडून रिकामे उत्तर आले.")
@@ -1276,13 +1303,14 @@ def run_content_generation(cid, mid, sess):
                                     for idx, it in enumerate(batch_items)
                                 ]
                                 solve_prompt = (
-                                    f"You are a senior exam paper evaluator.\n"
+                                    f"You are a senior exam paper evaluator for {ch_info['sub']}.\n"
                                     f"For each MCQ below, determine the strictly correct option index (0 for first option, 1 for second, 2 for third, 3 for fourth) and provide a concise 1-sentence factual explanation in {lang_str}.\n"
                                     f"Input MCQs:\n{json.dumps(solve_payload)}\n\n"
-                                    f"Output strictly a JSON list of objects: [{{\"id\": 0, \"correct_option_id\": 1, \"explanation\": \"...\"}}]"
+                                    f"Output strictly a JSON object with key 'answers':\n"
+                                    f"{{\n  \"answers\": [\n    {{\"id\": 0, \"correct_option_id\": 1, \"explanation\": \"...\"}}\n  ]\n}}"
                                 )
                                 solve_res = ask_groq(solve_prompt, json_mode=True)
-                                solve_data = parse_json_mcqs(solve_res)
+                                solve_data = parse_solve_json(solve_res)
                                 for s_item in solve_data:
                                     s_id = s_item.get("id")
                                     if s_id is not None and 0 <= s_id < len(batch_items):
@@ -1494,6 +1522,7 @@ def render_preview_message(cid, mid, post_id, sess):
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     print("🚀 Sidhu Sir's Bot is online 24/7!")
+    time.sleep(3) # Grace period for previous container shutdown to prevent 409
     while True:
         try:
             bot.infinity_polling(timeout=20, long_polling_timeout=10, logger_level=logging.INFO)
