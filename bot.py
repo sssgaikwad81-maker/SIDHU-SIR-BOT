@@ -1059,23 +1059,39 @@ def handle_doc(msg):
             bot.send_message(msg.chat.id, "⚠️ या फाईलमधून मजकूर काढता आले नाही (कदाचित ही स्कॅन केलेली प्रतिमा असावी). कृपया थेट फोटो काढून पाठवा.")
             return
 
-        # Store complete text up to 300,000 characters (supports 100+ questions!)
-        parsed_doc_mcqs = parse_all_document_mcqs(extracted)
-        doc_count = len(parsed_doc_mcqs)
-        user_sessions[msg.chat.id] = {
-            "topic": extracted[:300000],
-            "source_type": "doc",
-            "parsed_mcqs": parsed_doc_mcqs,
-            "total_mcqs": doc_count,
-            "file_name": fname,
-            "start_num": 1
-        }
-        if doc_count > 0:
+        # Fast smart detection: check if file is a Question Bank or Theory Study Notes
+        q_check_pat = r"(?:\n\s*|\A)(?:Q(?:uestion)?[\.\s]*\d+[\s\.:\)\|\-\–]+|प्रश्न\s*[\d१-९]+[\s\.:\)\|\-\–]+)"
+        has_mcq_markers = len(re.findall(q_check_pat, extracted[:50000], flags=re.IGNORECASE)) >= 2
+
+        if has_mcq_markers:
+            # File is a genuine Question Bank -> Parse MCQs cleanly
+            parsed_doc_mcqs = parse_all_document_mcqs(extracted)
+            doc_count = len(parsed_doc_mcqs)
+            user_sessions[msg.chat.id] = {
+                "topic": extracted[:300000],
+                "source_type": "doc",
+                "parsed_mcqs": parsed_doc_mcqs,
+                "total_mcqs": doc_count,
+                "file_name": fname,
+                "start_num": 1
+            }
             count_msg = f"📄 *Question Bank स्कॅन केली:* `{fname}`\n✅ *या फाईलमध्ये एकूण {doc_count} प्रश्न आढळले आहेत!*\n(सर्व प्रश्न १ ते {doc_count} क्रमाने सुरक्षित ठेवले आहेत)"
             bot.send_message(msg.chat.id, count_msg, parse_mode="Markdown")
             label = f"📄 {fname} (एकूण {doc_count} प्रश्न)"
         else:
-            label = f"📄 {fname} (अभ्यास साहित्य)"
+            # File is Theory Study Notes / Book -> Instant response in 0.1s without blocking!
+            user_sessions[msg.chat.id] = {
+                "topic": extracted[:300000],
+                "source_type": "doc",
+                "parsed_mcqs": [],
+                "total_mcqs": 0,
+                "file_name": fname,
+                "start_num": 1
+            }
+            doc_msg = f"📄 *अभ्यास साहित्य / नोट्स स्कॅन केले:* `{fname}`\n✅ *या फाईलमधील संपूर्ण संकल्पना व संदर्भ वाचले आहेत!*\n(खालील मेनूमधून तुम्ही यावर क्विझ किंवा रिव्हिजन नोट्स बनवू शकता)"
+            bot.send_message(msg.chat.id, doc_msg, parse_mode="Markdown")
+            label = f"📄 {fname} (अभ्यास नोट्स)"
+
         show_format_menu(msg.chat.id, label)
     except Exception as e:
         bot.edit_message_text(f"❌ फाईल वाचताना त्रुटी: {str(e)}", msg.chat.id, status.message_id)
