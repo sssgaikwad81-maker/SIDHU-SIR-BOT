@@ -150,6 +150,25 @@ def get_vision_model():
             return m
     return "qwen/qwen3.8-27b"
 
+def is_ai_refusal(text: str) -> bool:
+    """Detects canned AI refusals like 'I\'m sorry, but I can\'t help with that.' so the bot auto-falls back to Groq."""
+    if not text:
+        return True
+    low = text.strip().lower()
+    refusal_phrases = [
+        "i'm sorry, but i can't help with that",
+        "i cannot help with that",
+        "i am unable to help",
+        "i am sorry, but i cannot",
+        "i cannot fulfill this request",
+        "i'm unable to assist"
+    ]
+    if any(p in low for p in refusal_phrases):
+        return True
+    if len(low) < 100 and "sorry" in low and ("cannot" in low or "can't" in low or "unable" in low):
+        return True
+    return False
+
 def ask_claude(prompt: str, json_mode: bool = False, system_rules: str = "") -> str:
     """Calls Anthropic Claude 3.5 Haiku with premium Marathi/English reasoning."""
     if not ANTHROPIC_API_KEY:
@@ -371,7 +390,9 @@ def extract_single_mcq_block(block: str) -> dict:
         m = re.search(p, main)
         if m:
             q_part = m.group(1).strip()
-            q_clean = re.sub(r"^\s*(?:Q(?:uestion)?[\.\s]*\d+[\.:\)]|\d+[\.:\)]|प्रश्न\s*\d+[\.:\)])\s*", "", q_part, flags=re.IGNORECASE).strip()
+            # Strip Q 1 | UPSC 1984 or Question 1: headers cleanly
+            q_clean = re.sub(r"^\s*(?:Q(?:uestion)?[\.\s]*\d+[\s\.:\)\|\-\–]*|प्रश्न\s*[\d१-९]+[\s\.:\)\|\-\–]*|\d+[\.:\)]\s*)", "", q_part, flags=re.IGNORECASE).strip()
+            q_clean = re.sub(r"^(?:(?:UPSC|MPSC|Combine|Prelims|Mains|CSAT)?\s*[\d\–\-\|\s]+\n*)+", "", q_clean, flags=re.IGNORECASE).strip()
             if len(q_clean) > 5:
                 raw_opts = [m.group(i).strip()[:90] for i in range(2, 6)]
                 # Clean nested option tags if any
@@ -392,29 +413,36 @@ def extract_single_mcq_block(block: str) -> dict:
     return None
 
 def split_document_into_question_blocks(text: str) -> list:
-    """Splits document text into individual MCQ blocks without breaking statements inside questions."""
+    """Universal Question Splitter matching ANY exam question header (Q 1 |, Q1:, Q1., Question 1, प्रश्न 1, 1., etc.) without losing or duplicating questions."""
     text = text.strip()
     if not text:
         return []
 
-    # Strategy 1: Explicit Q / Question / प्रश्न markers
-    q_pattern = r"(?:\n\s*|\A)(?:Q(?:uestion)?[\.\s]*\d+[\.:\)]|प्रश्न\s*\d+[\.:\)])\s*"
-    if len(re.findall(q_pattern, text, flags=re.IGNORECASE)) >= 2:
-        parts = re.split(q_pattern, text, flags=re.IGNORECASE)
-        blocks = [p.strip() for p in parts if p.strip()]
+    # Strategy 1: Universal Question marker (supports Q 1 | UPSC 1984, Q 1 |, Q1:, Q1., Question 1, प्रश्न 1, etc.)
+    q_pat = r"(?:\n\s*|\A)(?:Q(?:uestion)?[\.\s]*\d+[\s\.:\)\|\-\–]+|प्रश्न\s*[\d१-९]+[\s\.:\)\|\-\–]+)"
+    parts = list(re.finditer(q_pat, text, flags=re.IGNORECASE))
+    if len(parts) >= 2:
+        blocks = []
+        for i in range(len(parts)):
+            start = parts[i].start()
+            end = parts[i+1].start() if i + 1 < len(parts) else len(text)
+            b = text[start:end].strip()
+            if b:
+                blocks.append(b)
         if len(blocks) >= 2:
             return blocks
 
     # Strategy 2: Splitting by Answer boundaries
-    ans_pat = r"(?:(?:\n\s*|\A)(?:Answer|Ans(?:wer)?|उत्तर|Correct)\s*[:\-]?\s*[\(\[]?[A-Da-d१-४1-4][\)\]]?.*?(?:\n\s*|\Z))"
-    if len(re.findall(ans_pat, text, flags=re.IGNORECASE)) >= 2:
+    ans_pat = r"(?:(?:^|\n)\s*(?:Answer|Ans(?:wer)?|उत्तर|Correct)\s*[:\-]?\s*[\(\[]?[A-Da-d१-४1-4][\)\.]?.*?(?:\n|$))"
+    ans_matches = list(re.finditer(ans_pat, text, flags=re.IGNORECASE))
+    if len(ans_matches) >= 2:
         blocks = []
         last_idx = 0
-        for m in re.finditer(ans_pat, text, flags=re.IGNORECASE):
+        for m in ans_matches:
             end_pos = m.end()
-            block = text[last_idx:end_pos].strip()
-            if block:
-                blocks.append(block)
+            b = text[last_idx:end_pos].strip()
+            if b:
+                blocks.append(b)
             last_idx = end_pos
         remainder = text[last_idx:].strip()
         if remainder:
@@ -584,6 +612,20 @@ def handle_text(msg):
 
     sess = user_sessions.get(msg.chat.id, {})
 
+    # Check if user is typing custom start offset
+    if "waiting_start_offset" in sess:
+        mid = sess.pop("waiting_start_offset")
+        digits = re.findall(r"\d+", topic)
+        if digits:
+            val = int(digits[0])
+            sess["start_num"] = val
+            bot.reply_to(msg, f"🎯 **सुरुवातीचा नंबर निश्चित केला:** `Q{val}`")
+            show_count_menu(msg.chat.id, mid)
+            return
+        else:
+            bot.reply_to(msg, "कृपया योग्य नंबर टाईप करा (उदा. 11, 21, 51).")
+            return
+
     # Check if user is typing custom question count
     if "waiting_custom_cnt" in sess:
         mid = sess.pop("waiting_custom_cnt")
@@ -658,6 +700,20 @@ def handle_text(msg):
 
                 show_question_edit_menu(msg.chat.id, mid, post_id, q_idx)
                 return
+
+    # Check if user manually pasted a complete single MCQ!
+    detected_single = extract_single_mcq_block(topic)
+    if detected_single:
+        user_sessions[msg.chat.id] = {
+            "topic": topic,
+            "source_type": "text_mcq",
+            "direct_mcq": detected_single,
+            "parsed_mcqs": [detected_single],
+            "total_mcqs": 1,
+            "start_num": 1
+        }
+        show_single_mcq_instant_menu(msg.chat.id, detected_single)
+        return
 
     user_sessions[msg.chat.id] = {"topic": topic, "source_type": "text"}
     show_format_menu(msg.chat.id, topic)
@@ -769,6 +825,31 @@ def handle_doc(msg):
         show_format_menu(msg.chat.id, label)
     except Exception as e:
         bot.edit_message_text(f"❌ फाईल वाचताना त्रुटी: {str(e)}", msg.chat.id, status.message_id)
+
+def show_single_mcq_instant_menu(cid, mcq):
+    """Shows instant 1-click As-Is Quiz Poll menu when user pastes a single manual question."""
+    corr_char = chr(65 + mcq["correct_option_id"])
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("⚡ जसा आहे तसा १-क्लिक क्विझ बनवा (Instant As-Is)", callback_data="instant_mcq_post"),
+        types.InlineKeyboardButton("🛠️ प्रश्न / पर्याय एडिट किंवा शफल करा", callback_data="instant_mcq_edit"),
+        types.InlineKeyboardButton("🤖 यावर AI कडून नवीन प्रश्न बनवा", callback_data="fmt_quiz"),
+        types.InlineKeyboardButton("❌ रद्द करा", callback_data="can_")
+    )
+    text = (
+        f"🎯 **हा १ थेट प्रश्न आढळला आहे!**\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"📌 *प्रश्न:*\n{mcq['question']}\n\n"
+        f"1️⃣ {mcq['options'][0]}\n"
+        f"2️⃣ {mcq['options'][1]}\n"
+        f"3️⃣ {mcq['options'][2]}\n"
+        f"4️⃣ {mcq['options'][3]}\n\n"
+        f"✅ *अचूक उत्तर:* **पर्याय {corr_char}**\n"
+        f"💡 *स्पष्टीकरण:* _{mcq['explanation']}_\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"👇 **कोणती कृती करायची आहे? निवडा:**"
+    )
+    bot.send_message(cid, text, reply_markup=markup, parse_mode="Markdown")
 
 def show_format_menu(cid, topic_label, mid=None):
     markup = types.InlineKeyboardMarkup(row_width=1)
@@ -1002,6 +1083,31 @@ def handle_cb(call):
         user_sessions[cid] = {}
         bot.edit_message_text("🔄 **सुरुवात:**\nकृपया खाली नवीन विषयाचे नाव, पुस्तकाचा फोटो, PDF किंवा Word फाईल (.docx) पाठवा.", cid, mid)
 
+    # Instant Single MCQ flow
+    elif call.data == "instant_mcq_post":
+        sess["quiz_source_mode"] = "as_is"
+        sess["fmt"] = "quiz"
+        sess["cnt"] = 1
+        show_channel_menu(cid, mid)
+
+    elif call.data == "instant_mcq_edit":
+        sess["quiz_source_mode"] = "as_is"
+        sess["fmt"] = "quiz"
+        sess["cnt"] = 1
+        q_item = sess.get("direct_mcq")
+        if q_item:
+            post_id = str(mid)
+            pending_posts[post_id] = {
+                "type": "quiz",
+                "channel_id": "@sidhu_sir_official",
+                "data": [q_item],
+                "start_num": 1,
+                "total_series_cnt": 1
+            }
+            show_question_edit_menu(cid, mid, post_id, 0)
+        else:
+            show_channel_menu(cid, mid)
+
     # Step 1: Format Chosen -> If Quiz, ask As-Is vs AI Generate; else choose channel
     elif call.data.startswith("fmt_"):
         fmt_val = call.data.replace("fmt_", "")
@@ -1080,6 +1186,72 @@ def handle_cb(call):
 
     elif call.data == "back_to_timer":
         show_count_menu(cid, mid)
+
+    # Range selection (1-20, 21-40, etc.)
+    elif call.data.startswith("rng_"):
+        parts = call.data.split("_")
+        r_start = int(parts[1])
+        r_end = int(parts[2])
+        sess["range_start"] = r_start
+        sess["range_end"] = r_end
+        sess["cnt"] = (r_end - r_start + 1)
+        sess["start_num"] = r_start
+        show_timer_menu(cid, mid)
+
+    # Set custom starting number
+    elif call.data == "set_start_offset":
+        sess["waiting_start_offset"] = mid
+        bot.edit_message_text(
+            "🔢 **नंबरिंग कुठून सुरू करायचे आहे? तो नंबर टाईप करून पाठवा:**\n*(उदा. 11, 21, 51, 101)*",
+            cid, mid, parse_mode="Markdown"
+        )
+
+    # Regenerate single question in editor
+    elif call.data.startswith("regen_q_"):
+        parts = call.data.split("_")
+        post_id = parts[2]
+        q_idx = int(parts[3])
+        if post_id in pending_posts and q_idx < len(pending_posts[post_id]["data"]):
+            bot.answer_callback_query(call.id, "⏳ नवीन प्रश्न तयार होत आहे...")
+            try:
+                ch_info = CHANNELS[sess.get("ch", "mpsc_official")]
+                lvl = sess.get("lvl", "combine")
+                sub_name = ch_info.get("sub", "General Studies")
+                tgt_lang = sess.get("lang", "marathi")
+                regen_prompt = (
+                    f"Generate exactly 1 brand new high-yield exam question for {sub_name} ({lvl} exam standard) in {tgt_lang}.\n"
+                    "Ensure 100% historical/constitutional accuracy, 4 distinct choices, correct option (0-3), and 1-sentence explanation.\n"
+                    "Output strictly a raw JSON object with keys: question, options, correct_option_id, explanation."
+                )
+                raw_new = ask_groq(regen_prompt, json_mode=True)
+                new_q_data = parse_json_mcqs(raw_new)
+                if new_q_data:
+                    item_to_put = standardize_mcq_for_exam(new_q_data[0] if isinstance(new_q_data, list) else new_q_data, lvl)
+                    pending_posts[post_id]["data"][q_idx] = item_to_put
+                    bot.answer_callback_query(call.id, "✅ प्रश्न यशस्वीरित्या बदलला!")
+            except Exception as re_err:
+                bot.answer_callback_query(call.id, f"त्रुटी: {str(re_err)[:40]}", show_alert=True)
+            show_question_edit_menu(cid, mid, post_id, q_idx)
+
+    # Shuffle options in editor
+    elif call.data.startswith("shuf_opt_"):
+        parts = call.data.split("_")
+        post_id = parts[2]
+        q_idx = int(parts[3])
+        if post_id in pending_posts and q_idx < len(pending_posts[post_id]["data"]):
+            q_it = pending_posts[post_id]["data"][q_idx]
+            old_opts = list(q_it["options"])
+            corr_idx = q_it["correct_option_id"]
+            if 0 <= corr_idx < len(old_opts):
+                corr_val = old_opts[corr_idx]
+                import random
+                shuffled = list(old_opts)
+                random.shuffle(shuffled)
+                new_corr_idx = shuffled.index(corr_val)
+                q_it["options"] = shuffled
+                q_it["correct_option_id"] = new_corr_idx
+                bot.answer_callback_query(call.id, "🔀 पर्याय शफल झाले! उत्तर सुरक्षित आहे.")
+            show_question_edit_menu(cid, mid, post_id, q_idx)
 
     # Manual Edit Menu: Choose which question to edit
     elif call.data.startswith("edt_menu_"):
