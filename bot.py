@@ -77,6 +77,7 @@ threading.Thread(target=keep_render_awake, daemon=True).start()
 TELEGRAM_BOT_TOKEN = "9253804253:AAG3NaTU704bmw00hznomU1NKgsl0g4JgvU"
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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").strip()
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
 CHANNELS = {
     "upsc_polity": {"title": "🏛️ Polity (UPSC)", "id": "@polity_quiz_mcq", "sub": "Indian Polity & Constitution", "lang": "English", "lvl": "upsc"},
@@ -159,6 +160,44 @@ def get_vision_candidates():
 def get_vision_model():
     cands = get_vision_candidates()
     return cands[0] if cands else "llama-3.2-11b-vision-preview" 
+
+def ask_gemini_vision(img_bytes: bytes, prompt: str) -> str:
+    """Calls Google Gemini 1.5 Flash Vision - world gold-standard for Marathi OCR (100% free with GEMINI_API_KEY)."""
+    if not GEMINI_API_KEY:
+        return None
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    headers = {"Content-Type": "application/json"}
+    import base64
+    b64 = base64.b64encode(img_bytes).decode('utf-8')
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": prompt},
+                {
+                    "inline_data": {
+                        "mime_type": "image/jpeg",
+                        "data": b64
+                    }
+                }
+            ]
+        }]
+    }
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=35)
+        if resp.status_code == 200:
+            data = resp.json()
+            candidates = data.get("candidates", [])
+            if candidates:
+                parts = candidates[0].get("content", {}).get("parts", [])
+                if parts:
+                    txt = parts[0].get("text", "")
+                    if txt and txt.strip():
+                        return txt.strip()
+        else:
+            logging.warning(f"Gemini Vision HTTP {resp.status_code}: {resp.text[:120]}")
+    except Exception as e:
+        logging.warning(f"Gemini Vision exception: {e}")
+    return None
 
 def is_ai_refusal(text: str) -> bool:
     """Detects canned AI refusals like 'I\'m sorry, but I can\'t help with that.' so the bot auto-falls back to Groq."""
