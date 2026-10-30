@@ -515,6 +515,41 @@ def extract_single_mcq_block(block: str) -> dict:
                         "has_detected_exp": True if exp_m else False,
                         "q_num": parsed_q_num
                     }
+
+    # Robust Fallback for unnumbered / bare 4-option lines before an answer marker
+    lines = [l.strip() for l in main.splitlines() if l.strip()]
+    if len(lines) >= 5 and ans_m:
+        cand_opts = lines[-4:]
+        if all(0 < len(o) < 150 for o in cand_opts):
+            q_text = "\n".join(lines[:-4]).strip()
+            q_clean = re.sub(r"^\s*(?:Q(?:uestion)?[\.\s]*\d+[\s\.:\)\|\-\–]*|प्रश्न\s*[\d१-९]+[\s\.:\)\|\-\–]*|\d+[\.:\)]\s*)", "", q_text, flags=re.IGNORECASE).strip()
+            q_clean = re.sub(r"^(?:(?:UPSC|MPSC|Combine|Prelims|Mains|CSAT)?\s*[\d\–\-\|\s]+\n*)+", "", q_clean, flags=re.IGNORECASE).strip()
+            clean_opts = []
+            for o in cand_opts:
+                o = re.sub(r"^\([A-Da-d१-४1-4]\)\s*", "", o).strip()
+                o = re.sub(r"^[A-Da-d१-४1-4][\.\:\)]\s*", "", o).strip()
+                clean_opts.append(o)
+
+            q_num_m = re.search(r'(?:Q(?:uestion)?[\.\s]*|प्रश्न\s*|\A\s*)([0-9१-९]+)', block, re.IGNORECASE)
+            parsed_q_num = None
+            if q_num_m:
+                num_str = q_num_m.group(1)
+                if any(ch in "१२३४५६७८९०" for ch in num_str):
+                    mar_nums = "०१२३४५६७८९"
+                    parsed_q_num = int("".join(str(mar_nums.index(c)) for c in num_str))
+                else:
+                    parsed_q_num = int(num_str)
+
+            return {
+                "question": q_clean or q_text,
+                "options": clean_opts,
+                "correct_option_id": corr_idx if 0 <= corr_idx <= 3 else 0,
+                "explanation": exp,
+                "has_detected_answer": True,
+                "has_detected_exp": True if exp_m else False,
+                "q_num": parsed_q_num
+            }
+
     return None
 
 def split_document_into_question_blocks(text: str) -> list:
