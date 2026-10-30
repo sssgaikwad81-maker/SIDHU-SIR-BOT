@@ -364,6 +364,11 @@ def extract_single_mcq_block(block: str) -> dict:
     exp = exp_m.group(1).strip()[:140] if exp_m else "संदर्भ नोट्सनुसार अचूक उत्तर."
 
     main = block
+    # Strip any Answer Key section from the question block so it does not pollute the last question
+    ans_key_cut = re.search(r"(?:\n\s*|\A)(?:ANSWER\s*KEYS?|उत्तरपत्रिका|उत्तरांची\s*सूची|ANSWERS?|KEYS?|उत्तरसूची|अचूक\s*उत्तरे|उत्तरतालिका)\b", main, re.IGNORECASE)
+    if ans_key_cut and ans_key_cut.start() > 20:
+        main = main[:ans_key_cut.start()].strip()
+
     cut_pos = len(main)
     if ans_m and ans_m.start() > 20:
         cut_pos = min(cut_pos, ans_m.start())
@@ -493,17 +498,38 @@ def parse_all_document_mcqs(text: str) -> list:
     return mcqs
 
 def extract_answer_key_dict(text: str) -> dict:
-    """Extracts answer key mappings strictly from Answer Key headers across all exam formats."""
+    """Extracts answer key mappings from headers, tables (including 3-column Q | Year | Ans), lists, and keys."""
     key_dict = {}
     header_pat = r"(?:ANSWER\s*KEYS?|उत्तरपत्रिका|उत्तरांची\s*सूची|ANSWERS?|KEYS?|उत्तरसूची|अचूक\s*उत्तरे|उत्तरतालिका|KEY\s*ANSWERS?)"
     m = re.search(r"(?:\n\s*|\A)" + header_pat + r"\s*[:\-]?\s*(.+)", text, re.IGNORECASE | re.DOTALL)
     if not m:
-        tail = text[-3500:] if len(text) > 3500 else text
+        tail = text[-4000:] if len(text) > 4000 else text
         m = re.search(header_pat + r"\s*[:\-]?\s*(.+)", tail, re.IGNORECASE | re.DOTALL)
         if not m:
             return {}
 
     search_text = m.group(1)
+
+    # Format A: 3-column table format (Q \n Year \n Ans, e.g. 1 \n 1984 \n A)
+    tbl_pairs = re.findall(r"([0-9१-९]+)[\s\n\t\|]+(?:(?:19|20)\d\d[\s\n\t\|]+)?([A-Da-d1-4१-४])\b", search_text)
+    for q_str, ans_str in tbl_pairs:
+        try:
+            q_num = int(q_str)
+            q_idx = q_num - 1
+            if ans_str in "1234":
+                c_id = int(ans_str) - 1
+            elif ans_str.upper() in "ABCD":
+                c_id = ord(ans_str.upper()) - ord("A")
+            else:
+                continue
+            key_dict[q_idx] = c_id
+        except Exception:
+            pass
+
+    if key_dict:
+        return key_dict
+
+    # Format B: Standard inline pairs (1. A, 1-b, 1: C, Q1 D, १-२)
     pat = r"(?:Q(?:uestion)?\s*)?([0-9१-९]+)[\s\.:\|\-\–\t]+[\(\[]?\s*([A-Da-d1-4१-४अ-ड])\s*[\)\]]?"
     pairs = re.findall(pat, search_text)
 
@@ -1492,6 +1518,14 @@ def handle_cb(call):
         post_id = call.data.replace("back_to_prev_", "")
         if "editing" in sess:
             del sess["editing"]
+
+        # If this was an instant single text question, return to instant menu!
+        if sess.get("source_type") == "text_mcq" and post_id in pending_posts:
+            q_data = pending_posts[post_id]["data"]
+            if q_data:
+                show_single_mcq_instant_menu(cid, q_data[0], mid)
+                return
+
         render_preview_message(cid, mid, post_id, sess)
 
     # Step 7: Publish to Target Channel (Non-blocking Asynchronous Background Thread)
@@ -1625,7 +1659,8 @@ def show_timer_menu(cid, mid):
     bot.edit_message_text("👇 **क्विझ प्रकार (Quiz Mode) निवडा:**", cid, mid, reply_markup=markup, parse_mode="Markdown")
 
 def run_content_generation(cid, mid, sess):
-    ch_info = CHANNELS[sess["ch"]]
+    ch_key = sess.get("ch", "mpsc_official")
+    ch_info = CHANNELS.get(ch_key, CHANNELS["mpsc_official"])
     topic = sess["topic"]
     fmt = sess["fmt"]
     lang = sess["lang"]
@@ -1867,13 +1902,20 @@ def run_content_generation(cid, mid, sess):
                 style_inst = "Format strictly as a comprehensive, well-aligned Markdown Table comparing key dimensions, articles, bodies, or provisions."
             elif notes_style == "bullet":
                 style_inst = "Format in clean, structured bullet points following the natural chronological / conceptual flow of the topic."
-            else: # hybrid
+            else: # hybrid / viral 3.4 lakh subscriber style
                 style_inst = (
-                    "HYBRID MASTER FORMAT (MANDATORY):\n"
-                    "1. 📌 मुख्य संकल्पना व व्याख्या (Concept & Definition - 2 concise lines)\n"
-                    "2. 📜 मुख्य कलमे व कायदेशीर तरतुदी (Key Articles / Provisions - Bullet list)\n"
-                    "3. 📊 महत्त्वाचा तुलनात्मक तक्ता (Key Comparison / Analysis Markdown Table)\n"
-                    "4. 🎯 Exam Trap / काय लक्षात ठेवावे? (Common exam confusions, exceptions, and landmark cases)"
+                    "VIRAL TELEGRAM CURRENT AFFAIRS CARD FORMAT (MANDATORY 3.4 LAKH SUBSCRIBERS STYLE):\n"
+                    "Format each news item or key topic as a beautiful shaded Telegram Blockquote Card using this exact syntax:\n"
+                    "emoji **[ठळक शीर्षक / Headline]**\n"
+                    ">■ **दिनांक** - [Date / Year]\n"
+                    ">■ **ठिकाण** - [Location / District / State / Country]\n"
+                    ">■ **अध्यक्ष / व्यक्ती / मंत्रालय** - [Key Person / Ministry / Organisation]\n"
+                    ">■ **उद्देश / वैशिष्ट्ये** - [Core Objective / Background / Definition]\n"
+                    ">■ **महत्त्वाचे फॅक्ट्स / आढावा** - [High-yield facts, numbers, key articles]\n\n"
+                    "CRITICAL TELEGRAM SYNTAX RULES:\n"
+                    "1. Every attribute bullet MUST start with '>■ ' so Telegram renders the shaded blockquote box with the vertical green stripe and quote marks!\n"
+                    "2. Do NOT write long paragraphs; break every point into '■ घटक - तपशील'.\n"
+                    "3. End with footer: ✍️ **संकलन :** ©सिधू सर ऑफिशियल | @sidhu_sir_official"
                 )
 
             prompt = (
@@ -1897,7 +1939,8 @@ def render_preview_message(cid, mid, post_id, sess):
     if post_id not in pending_posts:
         return
     item = pending_posts[post_id]
-    ch_info = CHANNELS[sess["ch"]]
+    ch_key = sess.get("ch", "mpsc_official")
+    ch_info = CHANNELS.get(ch_key, CHANNELS["mpsc_official"])
     fmt = item["type"]
 
     if fmt == "quiz":
