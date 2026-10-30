@@ -104,7 +104,8 @@ KNOWN_TEXT_MODELS = [
 ]
 
 KNOWN_VISION_MODELS = [
-    "qwen/qwen3.8-27b",
+    "llama-3.2-11b-vision-preview",
+    "llama-3.2-90b-vision-preview",
     "meta-llama/llama-4-scout-17b-16e-instruct"
 ]
 
@@ -866,7 +867,7 @@ def extract_text_from_photo(img_bytes: bytes) -> str:
     from PIL import Image
     import io
 
-    # 1. Compress & resize image to max 1024px to prevent any 429 'Request too large' errors
+    # 1. Resize image to 1500px max (sharp enough for tiny Marathi Devanagari font, but under 300KB)
     try:
         image = Image.open(io.BytesIO(img_bytes))
         if image.mode != "RGB":
@@ -880,7 +881,16 @@ def extract_text_from_photo(img_bytes: bytes) -> str:
 
     b64 = base64.b64encode(img_payload).decode('utf-8')
 
-    # 2. Try Claude Vision first if ANTHROPIC_API_KEY is available (industry gold standard for Marathi OCR)
+    ocr_instruction = (
+        "CRITICAL OCR INSTRUCTION:\n"
+        "You are an exact OCR engine for Marathi newspapers. Transcribe the ACTUAL printed Marathi text from this image VERBATIM.\n"
+        "1. Read the main bold headline word-for-word exactly as written (e.g. 'राज्यातील जिल्हा परिषदांच्या निवडणुकीचा मार्ग मोकळा').\n"
+        "2. Read the subheadings, boxes, commissions (e.g. बांठिया आयोग), benches (e.g. न्या. सूर्यकांत), numbers, and body text exactly as printed.\n"
+        "3. DO NOT interpret, DO NOT guess, DO NOT hallucinate job recruitments (like जिल्हा न्यायाधीश भरती) or other unrelated topics!\n"
+        "Output ONLY the real printed Marathi text from this newspaper image."
+    )
+
+    # 2. Try Claude Vision first if ANTHROPIC_API_KEY is available (gold standard for Marathi OCR)
     if ANTHROPIC_API_KEY:
         try:
             c_url = "https://api.anthropic.com/v1/messages"
@@ -891,7 +901,7 @@ def extract_text_from_photo(img_bytes: bytes) -> str:
             }
             c_payload = {
                 "model": "claude-3-5-haiku-20241022",
-                "max_tokens": 1500,
+                "max_tokens": 2000,
                 "messages": [{
                     "role": "user",
                     "content": [
@@ -905,7 +915,7 @@ def extract_text_from_photo(img_bytes: bytes) -> str:
                         },
                         {
                             "type": "text",
-                            "text": "Transcribe and extract all Marathi educational news facts, details, headlines, dates, and names from this newspaper clipping accurately in Marathi:"
+                            "text": ocr_instruction
                         }
                     ]
                 }]
@@ -920,26 +930,37 @@ def extract_text_from_photo(img_bytes: bytes) -> str:
         except Exception as ce:
             logging.warning(f"Claude Vision fallback to Groq: {ce}")
 
-    # 3. Groq Vision with compressed payload
+    # 3. Groq Vision with candidate model fallback
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {GROQ_API_KEY.strip()}", "Content-Type": "application/json"}
-    model_name = get_vision_model()
-    payload = {
-        "model": model_name,
-        "messages": [{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "Extract and transcribe all educational study notes, facts, and key concepts from this newspaper clipping accurately in Marathi/English:"},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
-            ]
-        }],
-        "temperature": 0.2,
-        "max_tokens": 1500
-    }
-    resp = requests.post(url, headers=headers, json=payload, timeout=40)
-    if resp.status_code == 200:
-        return resp.json()["choices"][0]["message"]["content"]
-    raise Exception(f"Vision API Error ({model_name}): {resp.status_code} {resp.text[:100]}")
+    candidate_vision_models = get_vision_candidates()
+
+    last_v_err = ""
+    for v_model in candidate_vision_models:
+        payload = {
+            "model": v_model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": ocr_instruction},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+                ]
+            }],
+            "temperature": 0.1,
+            "max_tokens": 2000
+        }
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=40)
+            if resp.status_code == 200:
+                txt = resp.json()["choices"][0]["message"]["content"]
+                if txt and txt.strip():
+                    return txt.strip()
+            last_v_err = f"Vision API Error ({v_model}): {resp.status_code} {resp.text[:120]}"
+        except Exception as ve:
+            last_v_err = str(ve)
+            continue
+
+    raise Exception(last_v_err or "सर्व व्हिजन मॉडेल्स अयशस्वी झाले.")
 
 # 3. Word Document (.docx) Extractor (Reads entire document without truncation)
 def extract_text_from_docx(docx_bytes: bytes) -> str:
