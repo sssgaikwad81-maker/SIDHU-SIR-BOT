@@ -288,17 +288,20 @@ def format_statements_cleanly(text: str) -> str:
     return t
 
 def is_multi_statement_card(q: dict) -> bool:
-    """Determines if a question genuinely requires a Two-Part Card or should be a single native poll."""
-    q_text = q.get("question", "")
+    """Determines if a question requires a Two-Part Card. Prevents any question text from being cut off at Telegram's 300 char poll limit."""
+    q_text = q.get("question", "").strip()
     options = q.get("options", [])
+
+    # If question text alone exceeds 230 characters, it MUST be a Two-Part Card so Telegram NEVER truncates it!
+    if len(q_text) > 230:
+        return True
 
     is_combo_opt = any(
         any(k in opt for k in ["फक्त", "आणि", "दोन्ही", "सर्व", "यांपैकी", "only", "Both", "Neither", "(अ)", "(ब)", "Only one"])
         for opt in options
     )
-    has_statements = any(st in q_text for st in ["\n(अ)", "\n(ब)", "\n1.", "\n2.", "खालील विधाने", "Consider the following"])
-
-    return len(q_text) > 220 and (has_statements or is_combo_opt)
+    has_statements = any(st in q_text for st in ["\n(अ)", "\n(ब)", "\n1.", "\n2.", "खालील विधाने", "Consider the following", "Arrange the following", "कालानुक्रम"])
+    return bool((has_statements or is_combo_opt) and len(q_text) > 150)
 
 def standardize_mcq_for_exam(q: dict, lvl: str) -> dict:
     """Strictly guarantees MPSC numbering: statements (अ), (ब), (क) and options १), २), ३), ४)
@@ -479,22 +482,45 @@ def parse_all_document_mcqs(text: str) -> list:
     return mcqs
 
 def extract_answer_key_dict(text: str) -> dict:
-    """Extracts answer key mappings (e.g. 1. A, 2. C, 3. B) from document text."""
+    """Extracts answer key mappings strictly from Answer Key headers across all exam formats."""
     key_dict = {}
-    ans_key_m = re.search(r"(?:ANSWER\s*KEY|उत्तरपत्रिका|उत्तरांची\s*सूची|ANSWERS|KEYS?)\s*[:\-]?\s*(.+)", text, re.IGNORECASE | re.DOTALL)
-    search_text = ans_key_m.group(1) if ans_key_m else text
-    pairs = re.findall(r"(?:Q(?:uestion)?\s*)?(\d+)[\.:\-\s]+[\(\[]?\s*([A-Da-d१-४1-4])[\)\]]?", search_text)
-    for q_num, ans_ch in pairs:
+    header_pat = r"(?:ANSWER\s*KEYS?|उत्तरपत्रिका|उत्तरांची\s*सूची|ANSWERS?|KEYS?|उत्तरसूची|अचूक\s*उत्तरे|उत्तरतालिका|KEY\s*ANSWERS?)"
+    m = re.search(r"(?:\n\s*|\A)" + header_pat + r"\s*[:\-]?\s*(.+)", text, re.IGNORECASE | re.DOTALL)
+    if not m:
+        tail = text[-3500:] if len(text) > 3500 else text
+        m = re.search(header_pat + r"\s*[:\-]?\s*(.+)", tail, re.IGNORECASE | re.DOTALL)
+        if not m:
+            return {}
+
+    search_text = m.group(1)
+    pat = r"(?:Q(?:uestion)?\s*)?([0-9१-९]+)[\s\.:\|\-\–\t]+[\(\[]?\s*([A-Da-d1-4१-४अ-ड])\s*[\)\]]?"
+    pairs = re.findall(pat, search_text)
+
+    for q_str, ans_str in pairs:
         try:
-            q_idx = int(q_num) - 1
-            if ans_ch in "1234":
-                key_dict[q_idx] = int(ans_ch) - 1
-            elif ans_ch in "१२३४":
-                key_dict[q_idx] = "१२३४".index(ans_ch)
-            elif ans_ch.upper() in "ABCD":
-                key_dict[q_idx] = ord(ans_ch.upper()) - ord("A")
+            if any(ch in "१२३४५६७८९०" for ch in q_str):
+                mar_nums = "०१२३४५६७८९"
+                q_num = int("".join(str(mar_nums.index(c)) for c in q_str))
+            else:
+                q_num = int(q_str)
+            q_idx = q_num - 1
+
+            if ans_str in "1234":
+                c_id = int(ans_str) - 1
+            elif ans_str in "१२३४":
+                c_id = "१२३४".index(ans_str)
+            elif ans_str.upper() in "ABCD":
+                c_id = ord(ans_str.upper()) - ord("A")
+            elif ans_str in "अकबड":
+                c_id = "अकबड".index(ans_str)
+            else:
+                continue
+
+            if 0 <= c_id <= 3 and q_idx >= 0:
+                key_dict[q_idx] = c_id
         except Exception:
             pass
+
     return key_dict
 
 def parse_plain_text_mcqs(text: str) -> list:
@@ -831,9 +857,8 @@ def show_single_mcq_instant_menu(cid, mcq):
     corr_char = chr(65 + mcq["correct_option_id"])
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
-        types.InlineKeyboardButton("⚡ जसा आहे तसा १-क्लिक क्विझ बनवा (Instant As-Is)", callback_data="instant_mcq_post"),
-        types.InlineKeyboardButton("🛠️ प्रश्न / पर्याय एडिट किंवा शफल करा", callback_data="instant_mcq_edit"),
-        types.InlineKeyboardButton("🤖 यावर AI कडून नवीन प्रश्न बनवा", callback_data="fmt_quiz"),
+        types.InlineKeyboardButton("⚡ जसा आहे तसा थेट पोस्ट करा (Instant Post)", callback_data="inst_post_ch"),
+        types.InlineKeyboardButton("🛠️ प्रश्न / पर्याय एडिट किंवा शफल करा", callback_data="inst_mcq_edit"),
         types.InlineKeyboardButton("❌ रद्द करा", callback_data="can_")
     )
     text = (
@@ -981,14 +1006,20 @@ def publish_in_background(post_id, cid, mid, item):
                 raw_q = q['question'].strip()
                 is_large = is_multi_statement_card(q)
 
+                is_eng_ch = (ch_info.get("lang") == "English") or (sess.get("lang") == "english")
+                if not exp:
+                    exp = "Correct answer as per standard reference notes." if is_eng_ch else "संदर्भ नोट्सनुसार अचूक उत्तर."
+
                 if is_large:
                     formatted_q = format_statements_cleanly(raw_q)
+                    q_badge = f"Question {curr_num}/{total_display}" if is_eng_ch else f"प्रश्न {curr_num}/{total_display}"
+                    f_guide = "Select the correct option in the poll below:" if is_eng_ch else "खालील पोलमध्ये अचूक पर्याय निवडा:"
                     card_text = (
-                        f"📋 **[प्रश्न {curr_num}/{total_display}]**\n"
+                        f"📋 **[{q_badge}]**\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"{formatted_q}\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"👇 **खालील पोलमध्ये अचूक पर्याय निवडा:**"
+                        f"👇 **{f_guide}**"
                     )
                     try:
                         bot.send_message(target_id, card_text, parse_mode="Markdown")
@@ -996,7 +1027,7 @@ def publish_in_background(post_id, cid, mid, item):
                         bot.send_message(target_id, card_text)
                     time.sleep(1.2)
 
-                    poll_q = f"[{curr_num}/{total_display}] वरील प्रश्नाचे अचूक उत्तर निवडा:"
+                    poll_q = f"[{curr_num}/{total_display}] Select the correct option for the question above:" if is_eng_ch else f"[{curr_num}/{total_display}] वरील प्रश्नाचे अचूक उत्तर निवडा:"
                 else:
                     poll_q = f"[{curr_num}/{total_display}] {raw_q}" if total_display > 1 else raw_q
 
@@ -1083,17 +1114,75 @@ def handle_cb(call):
         user_sessions[cid] = {}
         bot.edit_message_text("🔄 **सुरुवात:**\nकृपया खाली नवीन विषयाचे नाव, पुस्तकाचा फोटो, PDF किंवा Word फाईल (.docx) पाठवा.", cid, mid)
 
-    # Instant Single MCQ flow
-    elif call.data == "instant_mcq_post":
-        sess["quiz_source_mode"] = "as_is"
-        sess["fmt"] = "quiz"
-        sess["cnt"] = 1
-        show_channel_menu(cid, mid)
+    # Instant Single MCQ flow - 100% direct posting
+    elif call.data == "inst_post_ch":
+        show_instant_channel_menu(cid, mid)
 
-    elif call.data == "instant_mcq_edit":
-        sess["quiz_source_mode"] = "as_is"
-        sess["fmt"] = "quiz"
-        sess["cnt"] = 1
+    elif call.data == "back_to_inst_q":
+        q_item = sess.get("direct_mcq")
+        if q_item:
+            show_single_mcq_instant_menu(cid, q_item)
+        else:
+            bot.edit_message_text("🔄 कृपया प्रश्न पुन्हा पाठवा.", cid, mid)
+
+    elif call.data.startswith("instpub_"):
+        ch_key = call.data.replace("instpub_", "")
+        ch_target = CHANNELS.get(ch_key, {}).get("id", "@sidhu_sir_official")
+        ch_title = CHANNELS.get(ch_key, {}).get("title", ch_target)
+        q_item = sess.get("direct_mcq")
+
+        if not q_item:
+            bot.answer_callback_query(call.id, "प्रश्न सापडला नाही. कृपया पुन्हा पाठवा.")
+            return
+
+        bot.answer_callback_query(call.id, "🚀 थेट चॅनेलवर पोस्ट करत आहे...")
+        raw_q = q_item["question"].strip()
+        opts = [opt[:100] for opt in q_item["options"][:4]]
+        corr_id = q_item["correct_option_id"] if 0 <= q_item["correct_option_id"] <= 3 else 0
+        exp_txt = q_item.get("explanation", "").strip()[:180]
+
+        try:
+            is_eng_ch = (CHANNELS.get(ch_key, {}).get("lang") == "English") or (sess.get("lang") == "english")
+            if not exp_txt:
+                exp_txt = "Correct answer as per standard reference notes." if is_eng_ch else "संदर्भ नोट्सनुसार अचूक उत्तर."
+
+            if is_multi_statement_card(q_item):
+                formatted_q = format_statements_cleanly(raw_q)
+                q_badge = "Question" if is_eng_ch else "प्रश्न"
+                f_guide = "Select the correct option in the poll below:" if is_eng_ch else "खालील पोलमध्ये अचूक पर्याय निवडा:"
+                card_text = (
+                    f"📋 **[{q_badge}]**\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"{formatted_q}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"👇 **{f_guide}**"
+                )
+                bot.send_message(ch_target, card_text, parse_mode="Markdown")
+                time.sleep(1.2)
+                poll_q = "Select the correct option for the question above:" if is_eng_ch else "वरील प्रश्नाचे अचूक उत्तर निवडा:"
+            else:
+                poll_q = raw_q[:300]
+
+            bot.send_poll(
+                chat_id=ch_target,
+                question=poll_q,
+                options=opts,
+                type="quiz",
+                correct_option_id=corr_id,
+                explanation=exp_txt,
+                is_anonymous=True
+            )
+            bot.edit_message_text(
+                f"🎉 **अभिनंदन!** हा प्रश्न `{ch_title}` चॅनेलवर थेट यशस्वीरीत्या पोस्ट झाला आहे!",
+                cid, mid, parse_mode="Markdown"
+            )
+        except Exception as pub_err:
+            bot.edit_message_text(
+                f"❌ **पोस्ट करताना त्रुटी आली:** `{pub_err}`\n\nबॉट `{ch_target}` चा Admin आहे का ते तपासा.",
+                cid, mid
+            )
+
+    elif call.data == "inst_mcq_edit":
         q_item = sess.get("direct_mcq")
         if q_item:
             post_id = str(mid)
@@ -1373,6 +1462,31 @@ def handle_cb(call):
 
     elif call.data == "can_":
         bot.edit_message_text("❌ रद्द करण्यात आले.", cid, mid)
+
+def show_instant_channel_menu(cid, mid):
+    """Channel selector for Instant Single MCQ posting - 1 tap directly publishes!"""
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(CHANNELS["upsc_polity"]["title"], callback_data="instpub_upsc_polity"),
+        types.InlineKeyboardButton(CHANNELS["upsc_history"]["title"], callback_data="instpub_upsc_history")
+    )
+    markup.add(
+        types.InlineKeyboardButton(CHANNELS["upsc_geo"]["title"], callback_data="instpub_upsc_geo"),
+        types.InlineKeyboardButton(CHANNELS["upsc_economy"]["title"], callback_data="instpub_upsc_economy")
+    )
+    markup.add(
+        types.InlineKeyboardButton(CHANNELS["upsc_env"]["title"], callback_data="instpub_upsc_env"),
+        types.InlineKeyboardButton(CHANNELS["upsc_sci"]["title"], callback_data="instpub_upsc_sci")
+    )
+    markup.add(
+        types.InlineKeyboardButton(CHANNELS["mpsc_official"]["title"], callback_data="instpub_mpsc_official")
+    )
+    markup.add(types.InlineKeyboardButton("🔙 मागे जा (Back)", callback_data="back_to_inst_q"))
+    text = "👇 **कोणत्या चॅनेलवर पोस्ट करायचे आहे?**\n*(चॅनेल निवडताच १ सेकंदात थेट पोल जाईल!)*"
+    if mid:
+        bot.edit_message_text(text, cid, mid, reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(cid, text, reply_markup=markup, parse_mode="Markdown")
 
 def show_channel_menu(cid, mid):
     markup = types.InlineKeyboardMarkup(row_width=2)
