@@ -750,8 +750,22 @@ def handle_doc(msg):
             return
 
         # Store complete text up to 300,000 characters (supports 100+ questions!)
-        user_sessions[msg.chat.id] = {"topic": extracted[:300000], "source_type": "doc"}
-        label = f"📄 {fname} (संपूर्ण नोट्स)"
+        parsed_doc_mcqs = parse_all_document_mcqs(extracted)
+        doc_count = len(parsed_doc_mcqs)
+        user_sessions[msg.chat.id] = {
+            "topic": extracted[:300000],
+            "source_type": "doc",
+            "parsed_mcqs": parsed_doc_mcqs,
+            "total_mcqs": doc_count,
+            "file_name": fname,
+            "start_num": 1
+        }
+        if doc_count > 0:
+            count_msg = f"📄 *Question Bank स्कॅन केली:* `{fname}`\n✅ *या फाईलमध्ये एकूण {doc_count} प्रश्न आढळले आहेत!*\n(सर्व प्रश्न १ ते {doc_count} क्रमाने सुरक्षित ठेवले आहेत)"
+            bot.send_message(msg.chat.id, count_msg, parse_mode="Markdown")
+            label = f"📄 {fname} (एकूण {doc_count} प्रश्न)"
+        else:
+            label = f"📄 {fname} (अभ्यास साहित्य)"
         show_format_menu(msg.chat.id, label)
     except Exception as e:
         bot.edit_message_text(f"❌ फाईल वाचताना त्रुटी: {str(e)}", msg.chat.id, status.message_id)
@@ -812,6 +826,10 @@ def show_question_edit_menu(cid, mid, post_id, q_idx):
     )
 
     markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🔄 हा प्रश्न AI कडून नव्याने बनवा", callback_data=f"regen_q_{post_id}_{q_idx}"),
+        types.InlineKeyboardButton("🔀 पर्याय शफल करा (Shuffle Order)", callback_data=f"shuf_opt_{post_id}_{q_idx}")
+    )
     markup.add(types.InlineKeyboardButton("✏️ प्रश्न वाक्य बदला", callback_data=f"edtarget_{post_id}_{q_idx}_q"))
     markup.add(
         types.InlineKeyboardButton("१️⃣ पर्याय १ बदला", callback_data=f"edtarget_{post_id}_{q_idx}_opt0"),
@@ -869,20 +887,23 @@ def publish_in_background(post_id, cid, mid, item):
             posted_count = 0
             last_err = ""
 
+            start_num = item.get("start_num", 1)
+            total_display = item.get("total_series_cnt", (start_num + total_q - 1) if start_num > 1 else total_q)
+
             for i, q in enumerate(quizzes):
+                curr_num = start_num + i
                 exp = q.get("explanation", "")
                 if len(exp) + len(brand) <= 200:
                     exp += brand
                 exp = exp[:200]
 
                 raw_q = q['question'].strip()
-                # Smart Two-Part detection: ONLY for genuine multi-statement questions!
                 is_large = is_multi_statement_card(q)
 
                 if is_large:
                     formatted_q = format_statements_cleanly(raw_q)
                     card_text = (
-                        f"📋 **[प्रश्न {i+1}/{total_q}]**\n"
+                        f"📋 **[प्रश्न {curr_num}/{total_display}]**\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"{formatted_q}\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -894,9 +915,9 @@ def publish_in_background(post_id, cid, mid, item):
                         bot.send_message(target_id, card_text)
                     time.sleep(1.2)
 
-                    poll_q = f"[{i+1}/{total_q}] वरील प्रश्नाचे अचूक उत्तर निवडा:"
+                    poll_q = f"[{curr_num}/{total_display}] वरील प्रश्नाचे अचूक उत्तर निवडा:"
                 else:
-                    poll_q = f"[{i+1}/{total_q}] {raw_q}" if total_q > 1 else raw_q
+                    poll_q = f"[{curr_num}/{total_display}] {raw_q}" if total_display > 1 else raw_q
 
                 poll_kwargs = {
                     "chat_id": target_id,
@@ -1218,28 +1239,47 @@ def show_lang_menu(cid, mid):
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
         types.InlineKeyboardButton("🌐 Bilingual (मराठी + English)", callback_data="lng_bilingual"),
-        types.InlineKeyboardButton("🚩 फक्त शुद्ध मराठी", callback_data="lng_marathi"),
+        types.InlineKeyboardButton("🚩 फक्त शुद्ध मराठी (Pure Marathi)", callback_data="lng_marathi"),
+        types.InlineKeyboardButton("🔤 मराठी + इंग्रजी की-वर्ड्स (कंसात संज्ञा)", callback_data="lng_marathi_eng_kw"),
         types.InlineKeyboardButton("🇬🇧 Only English", callback_data="lng_english"),
         types.InlineKeyboardButton("🔙 मागे जा (Back)", callback_data="back_to_lang"))
     bot.edit_message_text("👇 **कोणत्या भाषेत कन्टेन्ट हवा आहे?**", cid, mid, reply_markup=markup, parse_mode="Markdown")
 
 def show_count_menu(cid, mid):
+    sess = user_sessions.get(cid, {})
+    total_file_q = sess.get("total_mcqs", 0)
     markup = types.InlineKeyboardMarkup(row_width=2)
+
+    if total_file_q > 0:
+        markup.add(types.InlineKeyboardButton(f"🚀 सर्व {total_file_q} प्रश्न सलग पोस्ट करा (Zero Loss)", callback_data=f"cnt_{total_file_q}"))
+        if total_file_q > 15:
+            # Add range batches: 1-20, 21-40, 41-60...
+            row = []
+            for r_start in range(1, total_file_q + 1, 20):
+                r_end = min(r_start + 19, total_file_q)
+                row.append(types.InlineKeyboardButton(f"📑 प्रश्न {r_start} ते {r_end}", callback_data=f"rng_{r_start}_{r_end}"))
+                if len(row) == 2:
+                    markup.add(*row)
+                    row = []
+            if row:
+                markup.add(*row)
+
     markup.add(
-        types.InlineKeyboardButton("⚡ १ प्रश्न", callback_data="cnt_1"),
-        types.InlineKeyboardButton("🔥 ५ प्रश्न", callback_data="cnt_5")
+        types.InlineKeyboardButton("⚡ ५ प्रश्न", callback_data="cnt_5"),
+        types.InlineKeyboardButton("🔥 १० प्रश्न", callback_data="cnt_10")
     )
     markup.add(
-        types.InlineKeyboardButton("🏆 १० प्रश्न", callback_data="cnt_10"),
-        types.InlineKeyboardButton("🚀 २५ प्रश्न", callback_data="cnt_25")
+        types.InlineKeyboardButton("🏆 २५ प्रश्न", callback_data="cnt_25"),
+        types.InlineKeyboardButton("🎯 ५० प्रश्न", callback_data="cnt_50")
     )
     markup.add(
-        types.InlineKeyboardButton("🎯 ५० प्रश्न", callback_data="cnt_50"),
-        types.InlineKeyboardButton("💯 १०० प्रश्न", callback_data="cnt_100")
+        types.InlineKeyboardButton("🔢 सुरुवातीचा नंबर बदला (Start No)", callback_data="set_start_offset"),
+        types.InlineKeyboardButton("✍️ स्वतः संख्या टाका (Custom)", callback_data="cnt_custom")
     )
-    markup.add(types.InlineKeyboardButton("✍️ स्वतः संख्या टाका (Custom Count)", callback_data="cnt_custom"))
     markup.add(types.InlineKeyboardButton("🔙 मागे जा (Back)", callback_data="back_to_cnt"))
-    bot.edit_message_text("👇 **किती प्रश्न तयार / पोस्ट करायचे आहेत?**", cid, mid, reply_markup=markup, parse_mode="Markdown")
+    cur_start = sess.get("start_num", 1)
+    prompt_txt = f"👇 **किती प्रश्न पोस्ट करायचे आहेत?**\n(सध्या सुरुवातीचा नंबर: **Q{cur_start}** आहे)"
+    bot.edit_message_text(prompt_txt, cid, mid, reply_markup=markup, parse_mode="Markdown")
 
 def show_timer_menu(cid, mid):
     markup = types.InlineKeyboardMarkup(row_width=1)
@@ -1325,8 +1365,14 @@ def run_content_generation(cid, mid, sess):
                         except Exception as se:
                             logging.warning(f"AI Auto-solver fallback: {se}")
 
-                    if len(direct_extracted) >= cnt:
+                    r_st = sess.get("range_start")
+                    r_en = sess.get("range_end")
+                    if r_st and r_en and r_st <= len(direct_extracted):
+                        all_mcqs = direct_extracted[r_st - 1 : r_en]
+                    elif len(direct_extracted) >= cnt:
                         all_mcqs = direct_extracted[:cnt]
+                    else:
+                        all_mcqs = list(direct_extracted)
 
             # Strategy B: If not enough questions or AI Generate mode, run safe batched AI calls
             if len(all_mcqs) < cnt:
@@ -1449,11 +1495,16 @@ def run_content_generation(cid, mid, sess):
 
             data = [standardize_mcq_for_exam(q, lvl) for q in raw_data]
 
+            r_st = sess.get("range_start")
+            default_start = r_st if r_st else sess.get("start_num", 1)
+            tot_cnt = sess.get("total_mcqs", len(data))
             pending_posts[post_id] = {
                 "type": "quiz",
                 "channel_id": ch_info["id"],
                 "data": data,
-                "timer": sess.get("timer")
+                "timer": sess.get("timer"),
+                "start_num": default_start,
+                "total_series_cnt": tot_cnt if tot_cnt > len(data) else (default_start + len(data) - 1 if default_start > 1 else len(data))
             }
 
         elif fmt == "mnemonic":
@@ -1462,7 +1513,29 @@ def run_content_generation(cid, mid, sess):
             pending_posts[post_id] = {"type": "mnemonic", "channel_id": ch_info["id"], "data": text}
 
         else: # notes
-            prompt = f"Create a 1-Minute Quick Revision Note in {lang_str} for '{ch_info['sub']}' on topic '{topic[:12000]}'. Ensure strict historical accuracy. 4-5 high-yield bullet points with emojis, key articles/facts, and exam traps."
+            notes_style = sess.get("notes_style", "hybrid")
+            if notes_style == "table":
+                style_inst = "Format strictly as a comprehensive, well-aligned Markdown Table comparing key dimensions, articles, bodies, or provisions."
+            elif notes_style == "bullet":
+                style_inst = "Format in clean, structured bullet points following the natural chronological / conceptual flow of the topic."
+            else: # hybrid
+                style_inst = (
+                    "HYBRID MASTER FORMAT (MANDATORY):\n"
+                    "1. 📌 मुख्य संकल्पना व व्याख्या (Concept & Definition - 2 concise lines)\n"
+                    "2. 📜 मुख्य कलमे व कायदेशीर तरतुदी (Key Articles / Provisions - Bullet list)\n"
+                    "3. 📊 महत्त्वाचा तुलनात्मक तक्ता (Key Comparison / Analysis Markdown Table)\n"
+                    "4. 🎯 Exam Trap / काय लक्षात ठेवावे? (Common exam confusions, exceptions, and landmark cases)"
+                )
+
+            prompt = (
+                f"You are a master faculty for UPSC & MPSC exams ({ch_info['sub']}).\n"
+                f"Create a high-yield, structured Revision Note in {lang_str} on:\n'''\n{topic[:12000]}\n'''\n\n"
+                f"{style_inst}\n\n"
+                f"STRICT RULES:\n"
+                f"- Zero loss of key exam facts.\n"
+                f"- 100% accurate historical & constitutional facts.\n"
+                f"- Use bold text and clean spacing for easy reading on mobile."
+            )
             text = ask_groq(prompt, json_mode=False)
             pending_posts[post_id] = {"type": "notes", "channel_id": ch_info["id"], "data": text}
 
