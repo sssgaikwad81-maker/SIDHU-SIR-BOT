@@ -800,21 +800,98 @@ def handle_text(msg):
 # 2. Book Photo Input (Vision AI)
 @bot.message_handler(content_types=['photo'])
 def handle_photo(msg):
-    status = bot.reply_to(msg, "📸 *पुस्तकाचा फोटो मिळाला!* AI पान वाचत आहे...", parse_mode="Markdown")
+    status = bot.reply_to(msg, "📸 *वृत्तपत्राचा फोटो मिळाला!* AI मजकूर वाचत आहे...", parse_mode="Markdown")
     try:
         file_info = bot.get_file(msg.photo[-1].file_id)
         img_bytes = bot.download_file(file_info.file_path)
         extracted_text = extract_text_from_photo(img_bytes)
         bot.delete_message(msg.chat.id, status.message_id)
 
-        user_sessions[msg.chat.id] = {"topic": extracted_text[:5000], "source_type": "photo"}
-        show_format_menu(msg.chat.id, "📖 पुस्तकाचे पान (Photo Scanned)")
+        cid = msg.chat.id
+        sess = user_sessions.get(cid, {})
+
+        # If user sends multiple photos within 45 seconds, seamlessly combine them!
+        now_t = time.time()
+        last_t = sess.get("last_photo_time", 0)
+        if sess.get("source_type") == "photo" and (now_t - last_t < 45) and "topic" in sess:
+            sess["topic"] += "\n\n" + extracted_text
+            sess["photo_count"] = sess.get("photo_count", 1) + 1
+            sess["last_photo_time"] = now_t
+            label = f"📸 {sess['photo_count']} वृत्तपत्रांचे फोटो ( एकत्र स्कॅन केले )"
+            bot.send_message(cid, f"✅ *अजून १ फोटो जोडला!* (एकूण {sess['photo_count']} फोटो एकत्र केले आहेत)", parse_mode="Markdown")
+        else:
+            sess["topic"] = extracted_text
+            sess["source_type"] = "photo"
+            sess["photo_count"] = 1
+            sess["last_photo_time"] = now_t
+            label = "📸 वृत्तपत्राचे कात्रण (Newspaper Scan)"
+
+        user_sessions[cid] = sess
+        show_format_menu(cid, label)
     except Exception as e:
         bot.edit_message_text(f"❌ फोटो वाचताना त्रुटी: {str(e)}", msg.chat.id, status.message_id)
 
 def extract_text_from_photo(img_bytes: bytes) -> str:
+    """Compresses high-res photos to 1024px thumbnail to avoid 429 token limits, and uses Claude Vision + Groq Vision."""
     import base64
-    b64 = base64.b64encode(img_bytes).decode('utf-8')
+    from PIL import Image
+    import io
+
+    # 1. Compress & resize image to max 1024px to prevent any 429 'Request too large' errors
+    try:
+        image = Image.open(io.BytesIO(img_bytes))
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        image.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+        out_buf = io.BytesIO()
+        image.save(out_buf, format="JPEG", quality=80, optimize=True)
+        img_payload = out_buf.getvalue()
+    except Exception:
+        img_payload = img_bytes
+
+    b64 = base64.b64encode(img_payload).decode('utf-8')
+
+    # 2. Try Claude Vision first if ANTHROPIC_API_KEY is available (industry gold standard for Marathi OCR)
+    if ANTHROPIC_API_KEY:
+        try:
+            c_url = "https://api.anthropic.com/v1/messages"
+            c_headers = {
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json"
+            }
+            c_payload = {
+                "model": "claude-3-5-haiku-20241022",
+                "max_tokens": 1500,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/jpeg",
+                                "data": b64
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": "Transcribe and extract all Marathi educational news facts, details, headlines, dates, and names from this newspaper clipping accurately in Marathi:"
+                        }
+                    ]
+                }]
+            }
+            c_resp = requests.post(c_url, headers=c_headers, json=c_payload, timeout=45)
+            if c_resp.status_code == 200:
+                c_data = c_resp.json().get("content", [])
+                if c_data:
+                    c_txt = c_data[0].get("text", "")
+                    if c_txt and c_txt.strip():
+                        return c_txt.strip()
+        except Exception as ce:
+            logging.warning(f"Claude Vision fallback to Groq: {ce}")
+
+    # 3. Groq Vision with compressed payload
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {GROQ_API_KEY.strip()}", "Content-Type": "application/json"}
     model_name = get_vision_model()
@@ -823,7 +900,7 @@ def extract_text_from_photo(img_bytes: bytes) -> str:
         "messages": [{
             "role": "user",
             "content": [
-                {"type": "text", "text": "Extract and transcribe all educational study notes, facts, and key concepts from this textbook page accurately in Marathi/English:"},
+                {"type": "text", "text": "Extract and transcribe all educational study notes, facts, and key concepts from this newspaper clipping accurately in Marathi/English:"},
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
             ]
         }],
@@ -1048,6 +1125,9 @@ def show_answer_select_menu(cid, mid, post_id, q_idx):
 def publish_in_background(post_id, cid, mid, item):
     """Executes posting with Two-Part Cards ONLY for genuine multi-statement questions, and native polls for direct ones."""
     target_id = item["channel_id"]
+    sess = user_sessions.get(cid, {})
+    ch_info = CHANNELS.get(sess.get("ch"), {})
+    is_eng_ch = (ch_info.get("lang") == "English") or (sess.get("lang") == "english") or (target_id != "@sidhu_sir_official")
     try:
         if item["type"] == "quiz":
             quizzes = item["data"]
