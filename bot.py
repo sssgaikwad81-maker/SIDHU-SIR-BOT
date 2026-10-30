@@ -429,7 +429,7 @@ def standardize_mcq_for_exam(q: dict, lvl: str) -> dict:
 
 def extract_single_mcq_block(block: str) -> dict:
     """Robustly extracts an MCQ ensuring statements 1, 2, 3 and chronological sequences are NEVER confused with options."""
-    ans_m = re.search(r"(?:\n\s*|\A)(?:उत्तर|Ans(?:wer)?|Correct)\s*[:\-]?\s*[\(\[]?\s*([A-Da-d१-४1-4])\s*[\)\]]?", block, re.IGNORECASE)
+    ans_m = re.search(r"(?:\n\s*|\A)(?:[✅\*\s]*)?(?:उत्तर|Ans(?:wer)?|Correct|अचूक\s*उत्तर|योग्य\s*पर्याय|पर्याय)\s*[:\-]?\s*(?:पर्याय\s*)?[\(\[]?\s*([A-Da-d१-४1-4])\s*[\)\]]?", block, re.IGNORECASE)
     corr_idx = 0
     if ans_m:
         ch = ans_m.group(1)
@@ -440,7 +440,7 @@ def extract_single_mcq_block(block: str) -> dict:
         elif ch.upper() in "ABCD":
             corr_idx = ord(ch.upper()) - ord("A")
 
-    exp_m = re.search(r"(?:\n\s*|\A)(?:स्पष्टीकरण|Explanation|Exp)\s*[:\-]?\s*(.+)", block, re.IGNORECASE | re.DOTALL)
+    exp_m = re.search(r"(?:\n\s*|\A)(?:[💡\*\s]*)?(?:स्पष्टीकरण|Explanation|Exp)\s*[:\-]?\s*(.+)", block, re.IGNORECASE | re.DOTALL)
     exp = exp_m.group(1).strip()[:140] if exp_m else "संदर्भ नोट्सनुसार अचूक उत्तर."
 
     main = block
@@ -458,6 +458,12 @@ def extract_single_mcq_block(block: str) -> dict:
 
     # Schemas: Strictly sequential 4 options!
     patterns = [
+        # 1️⃣ ... 2️⃣ ... 3️⃣ ... 4️⃣ ...
+        r"(?s)(.*?)(?:^|\n|\s)1️⃣\s*(.+?)(?:^|\n|\s)2️⃣\s*(.+?)(?:^|\n|\s)3️⃣\s*(.+?)(?:^|\n|\s)4️⃣\s*(.+)$",
+        # [1] ... [2] ... [3] ... [4] ...
+        r"(?s)(.*?)\[1\]\s*(.+?)\[2\]\s*(.+?)\[3\]\s*(.+?)\[4\]\s*(.+)$",
+        # [A] ... [B] ... [C] ... [D] ...
+        r"(?s)(.*?)\[[aA]\]\s*(.+?)\[[bB]\]\s*(.+?)\[[cC]\]\s*(.+?)\[[dD]\]\s*(.+)$",
         # (1) ... (2) ... (3) ... (4) ...
         r"(?s)(.*?)\(1\)\s*(.+?)\(2\)\s*(.+?)\(3\)\s*(.+?)\(4\)\s*(.+)$",
         # (a) ... (b) ... (c) ... (d) ...
@@ -2005,8 +2011,17 @@ def run_content_generation(cid, mid, sess):
                         except Exception:
                             pass
 
-                    # Keep prompt context chunk safely under 12,000 chars to prevent any 400 token length errors
-                    chunk_text = topic[:12000]
+                    # Intelligently locate the actual chapter in large documents instead of always taking the first 12,000 chars
+                    f_name = sess.get("file_name", "")
+                    clean_doc_topic = re.sub(r"^(?:\d+[\s\.\-_]+)?", "", f_name)
+                    clean_doc_topic = re.sub(r"(?i)(?:by\s+.*|\.docx|\.pdf|\.doc)", "", clean_doc_topic).strip()
+
+                    chunk_text = topic[:15000]
+                    if clean_doc_topic and len(clean_doc_topic) >= 3:
+                        match_pos = topic.find(clean_doc_topic)
+                        if match_pos != -1 and match_pos > 2000:
+                            start_p = max(0, match_pos - 200)
+                            chunk_text = topic[start_p : start_p + 15000]
 
                     if qmode == "as_is":
                         pattern_instruction = (
@@ -2069,8 +2084,18 @@ def run_content_generation(cid, mid, sess):
                                 "- खालील ४ पर्याय MUST be numbered: १) ..., २) ..., ३) ..., ४) ...\n"
                             )
 
+                        topic_guard = ""
+                        if clean_doc_topic and len(clean_doc_topic) >= 3:
+                            topic_guard = (
+                                f"MANDATORY CHAPTER / TOPIC REQUIREMENT:\n"
+                                f"- The document is specifically titled: '{clean_doc_topic}'.\n"
+                                f"- All questions MUST strictly test the core concepts, articles, systems, and features of '{clean_doc_topic}'.\n"
+                                f"- DO NOT drift into basic introductory history or other topics (like Making of Constitution) unless that is the exact title!\n"
+                            )
+
                         pattern_instruction += (
-                            f"Subject: {ch_info['sub']}. Language: {lang_str}.\n"
+                            f"Subject: {ch_info['sub']}. Topic: {clean_doc_topic or 'General'}. Language: {lang_str}.\n"
+                            f"{topic_guard}"
                             f"Source Material / Notes:\n'''\n{chunk_text}\n'''\n\n"
                             f"Generate exactly {b_sz} high-yield MCQs (Batch {b_start} to {b_end}).\n"
                         )
