@@ -86,7 +86,9 @@ CHANNELS = {
     "upsc_economy": {"title": "📈 Economy (UPSC)", "id": "@economy_quiz_mcq", "sub": "Economy & Budget", "lang": "English", "lvl": "upsc"},
     "upsc_env": {"title": "🌿 Environment (UPSC)", "id": "@environment_quiz_mcq", "sub": "Ecology & Wildlife", "lang": "English", "lvl": "upsc"},
     "upsc_sci": {"title": "🔬 Science & Tech (UPSC)", "id": "@science_quiz_mcq", "sub": "Science, Space & Tech", "lang": "English", "lvl": "upsc"},
-    "mpsc_official": {"title": "🚩 Sidhu Sir Official (MPSC)", "id": "@sidhu_sir_official", "sub": "MPSC GS All Subjects", "lang": "Bilingual", "lvl": "combine"}
+    "mpsc_official": {"title": "🚩 Sidhu Sir Official (MPSC)", "id": "@sidhu_sir_official", "sub": "MPSC GS All Subjects", "lang": "Bilingual", "lvl": "combine"},
+    "vachal_tar_vachal": {"title": "📖 वाचाल तर वाचाल", "id": "@Vachal_Tar_Vachal", "sub": "प्रबोधन व वाचन चळवळ", "lang": "Marathi", "lvl": "combine"},
+    "ebooks_lab": {"title": "📚 eBooks Lab", "id": "@eBooks_Lab", "sub": "ई-पुस्तके व अभ्यास साहित्य", "lang": "Marathi", "lvl": "combine"}
 }
 
 logging.basicConfig(level=logging.INFO)
@@ -938,6 +940,15 @@ def extract_text_from_photo(img_bytes: bytes) -> str:
         "Output ONLY the real printed Marathi text from this newspaper image."
     )
 
+    # 1. Try Google Gemini 1.5 Flash Vision first (World gold-standard for Marathi OCR, 100% free with GEMINI_API_KEY)
+    if GEMINI_API_KEY:
+        try:
+            gemini_txt = ask_gemini_vision(img_payload, ocr_instruction)
+            if gemini_txt and gemini_txt.strip():
+                return gemini_txt.strip()
+        except Exception as ge:
+            logging.warning(f"Gemini Vision fallback: {ge}")
+
     # 2. Try Claude Vision first if ANTHROPIC_API_KEY is available (gold standard for Marathi OCR)
     if ANTHROPIC_API_KEY:
         try:
@@ -1776,6 +1787,10 @@ def show_instant_channel_menu(cid, mid):
     markup.add(
         types.InlineKeyboardButton(CHANNELS["mpsc_official"]["title"], callback_data="instpub_mpsc_official")
     )
+    markup.add(
+        types.InlineKeyboardButton(CHANNELS["vachal_tar_vachal"]["title"], callback_data="instpub_vachal_tar_vachal"),
+        types.InlineKeyboardButton(CHANNELS["ebooks_lab"]["title"], callback_data="instpub_ebooks_lab")
+    )
     markup.add(types.InlineKeyboardButton("🔙 मागे जा (Back)", callback_data="back_to_inst_q"))
     text = "👇 **कोणत्या चॅनेलवर पोस्ट करायचे आहे?**\n*(चॅनेल निवडताच १ सेकंदात थेट पोल जाईल!)*"
     if mid:
@@ -1799,6 +1814,10 @@ def show_channel_menu(cid, mid):
     )
     markup.add(
         types.InlineKeyboardButton(CHANNELS["mpsc_official"]["title"], callback_data="ch_mpsc_official")
+    )
+    markup.add(
+        types.InlineKeyboardButton(CHANNELS["vachal_tar_vachal"]["title"], callback_data="ch_vachal_tar_vachal"),
+        types.InlineKeyboardButton(CHANNELS["ebooks_lab"]["title"], callback_data="ch_ebooks_lab")
     )
     markup.add(types.InlineKeyboardButton("🔙 मागे जा (Back)", callback_data="back_to_ch"))
     bot.edit_message_text("👇 **कोणत्या चॅनेलवर पोस्ट करायचे आहे?**", cid, mid, reply_markup=markup, parse_mode="Markdown")
