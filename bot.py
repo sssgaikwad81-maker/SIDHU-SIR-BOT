@@ -287,6 +287,35 @@ def format_statements_cleanly(text: str) -> str:
     t = re.sub(r"\n{3,}", "\n\n", t).strip()
     return t
 
+def format_notes_for_telegram(text: str) -> str:
+    """Converts notes with '>■' to native Telegram HTML <blockquote> cards so they render with the beautiful pinkish shaded box, vertical line, and quote mark."""
+    lines = text.strip().split("\n")
+    html_lines = []
+    in_quote = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith(">"):
+            if not in_quote:
+                html_lines.append("<blockquote>")
+                in_quote = True
+            content = stripped.lstrip(">").strip()
+            # Clean duplicate bullets
+            content = re.sub(r"^[•\-\*\■]\s*", "■ ", content)
+            if not content.startswith("■"):
+                content = "■ " + content
+            # Convert **bold** to <b>bold</b>
+            content = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", content)
+            html_lines.append(content)
+        else:
+            if in_quote:
+                html_lines.append("</blockquote>")
+                in_quote = False
+            content = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", line)
+            html_lines.append(content)
+    if in_quote:
+        html_lines.append("</blockquote>")
+    return "\n".join(html_lines)
+
 def is_multi_statement_card(q: dict) -> bool:
     """Determines if a question requires a Two-Part Card. Prevents any question text from being cut off at Telegram's 300 char poll limit."""
     q_text = q.get("question", "").strip()
@@ -1985,17 +2014,19 @@ def run_content_generation(cid, mid, sess):
             else: # hybrid / viral 3.4 lakh subscriber style
                 style_inst = (
                     "VIRAL TELEGRAM CURRENT AFFAIRS CARD FORMAT (MANDATORY 3.4 LAKH SUBSCRIBERS STYLE):\n"
-                    "Format each news item or key topic as a beautiful shaded Telegram Blockquote Card using this exact syntax:\n"
-                    "emoji **[ठळक शीर्षक / Headline]**\n"
-                    ">■ **दिनांक** - [Date / Year]\n"
-                    ">■ **ठिकाण** - [Location / District / State / Country]\n"
-                    ">■ **अध्यक्ष / व्यक्ती / मंत्रालय** - [Key Person / Ministry / Organisation]\n"
-                    ">■ **उद्देश / वैशिष्ट्ये** - [Core Objective / Background / Definition]\n"
-                    ">■ **महत्त्वाचे फॅक्ट्स / आढावा** - [High-yield facts, numbers, key articles]\n\n"
-                    "CRITICAL TELEGRAM SYNTAX RULES:\n"
-                    "1. Every attribute bullet MUST start with '>■ ' so Telegram renders the shaded blockquote box with the vertical green stripe and quote marks!\n"
-                    "2. Do NOT write long paragraphs; break every point into '■ घटक - तपशील'.\n"
-                    "3. End with footer: ✍️ **संकलन :** ©सिधू सर ऑफिशियल | @sidhu_sir_official"
+                    "Format each news event as a unified, beautiful shaded Telegram Blockquote Card using this syntax:\n"
+                    "emoji **[ठळक आकर्षक शीर्षक]**\n"
+                    ">■ **[विशिष्ट घटक]** - [तपशील]\n\n"
+                    "CRITICAL ATTRIBUTE LABELING RULE (STRICT):\n"
+                    "1. DO NOT USE SLASH-SEPARATED TEMPLATES! Never write 'अध्यक्ष / व्यक्ती / मंत्रालय' or 'उद्देश / वैशिष्ट्ये'!\n"
+                    "2. Choose ONLY ONE natural, single, relevant Marathi word per line that fits the fact:\n"
+                    "   - If sports/event: use '■ **खेळाडू** - ...', '■ **बोली / रक्कम** - ...', '■ **संघ** - ...', '■ **स्थान** - ...'\n"
+                    "   - If government scheme: use '■ **मंत्रालय** - ...', '■ **सुरुवात** - ...', '■ **उद्देश** - ...'\n"
+                    "   - If appointment/meeting: use '■ **अध्यक्ष** - ...', '■ **ठिकाण** - ...', '■ **सहभाग** - ...'\n"
+                    "   - Other clean single labels: '■ **कालावधी** - ...', '■ **आयोजक** - ...', '■ **विशेष नोंद** - ...'\n"
+                    "3. COHESIVE CARD: Group all related points of the event into ONE unified card (do not split 1 event into 6 tiny repetitive fragments!).\n"
+                    "4. Every attribute line MUST start with '>■ ' so Telegram renders the shaded card box!\n"
+                    "5. End with footer: ✍️ **संकलन :** ©सिधू सर ऑफिशियल | @sidhu_sir_official"
                 )
 
             prompt = (
@@ -2057,10 +2088,14 @@ def render_preview_message(cid, mid, post_id, sess):
         markup.add(types.InlineKeyboardButton("🔙 मागे जा (Back / बदल करा)", callback_data="back_to_lang"))
     markup.add(types.InlineKeyboardButton("❌ रद्द करा (Cancel)", callback_data="can_"))
 
+    p_mode = "HTML" if fmt in ["notes", "mnemonic"] else "Markdown"
     try:
-        bot.edit_message_text(preview, cid, mid, reply_markup=markup, parse_mode="Markdown")
+        bot.edit_message_text(preview, cid, mid, reply_markup=markup, parse_mode=p_mode)
     except Exception:
-        bot.send_message(cid, preview, reply_markup=markup, parse_mode="Markdown")
+        try:
+            bot.send_message(cid, preview, reply_markup=markup, parse_mode=p_mode)
+        except Exception:
+            bot.send_message(cid, preview, reply_markup=markup)
 
 # ------------------------------------------------------------------------------
 # 6. RUN BOT (CLEAN INFINITY POLLING WITH AUTO-RESTART)
