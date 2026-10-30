@@ -141,15 +141,24 @@ def get_text_candidates():
 
     return candidates
 
-def get_vision_model():
+def get_vision_candidates():
     available = get_available_groq_models()
+    candidates = []
     for m in KNOWN_VISION_MODELS:
         if m in available:
-            return m
+            candidates.append(m)
     for m in available:
-        if any(v in m.lower() for v in ["qwen", "vision", "scout"]):
-            return m
-    return "qwen/qwen3.8-27b"
+        m_low = m.lower()
+        if ("vision" in m_low or "scout" in m_low) and not any(b in m_low for b in ["guard", "whisper", "qwen"]):
+            if m not in candidates:
+                candidates.append(m)
+    if not candidates:
+        candidates = ["llama-3.2-11b-vision-preview", "llama-3.2-90b-vision-preview", "meta-llama/llama-4-scout-17b-16e-instruct"]
+    return candidates
+
+def get_vision_model():
+    cands = get_vision_candidates()
+    return cands[0] if cands else "llama-3.2-11b-vision-preview" 
 
 def is_ai_refusal(text: str) -> bool:
     """Detects canned AI refusals like 'I\'m sorry, but I can\'t help with that.' so the bot auto-falls back to Groq."""
@@ -2126,11 +2135,12 @@ def render_preview_message(cid, mid, post_id, sess):
         markup.add(types.InlineKeyboardButton("🔙 मागे जा (Back / बदल करा)", callback_data="back_to_timer"))
     else:
         markup.add(types.InlineKeyboardButton("🔙 मागे जा (Back / बदल करा)", callback_data="back_to_lang"))
-        # Add 1-click WhatsApp Share button for notes
+        # Add 1-click WhatsApp Share button for notes with safe URL length (under 150 chars to prevent 400 reply markup error)
         try:
             import urllib.parse
-            wa_text = item["data"] + "\n\n📢 Join Telegram: @sidhusirofficial"
-            wa_url = "https://api.whatsapp.com/send?text=" + urllib.parse.quote_plus(wa_text)
+            sub_lbl = ch_info.get("sub", "MPSC/UPSC")
+            wa_summary = f"📚 {sub_lbl} Revision Notes by Sidhu Sir\n👉 Join Telegram: @sidhusirofficial"
+            wa_url = "https://api.whatsapp.com/send?text=" + urllib.parse.quote_plus(wa_summary)
             markup.add(types.InlineKeyboardButton("📲 WhatsApp वर शेअर करा (Share to WhatsApp)", url=wa_url))
         except Exception:
             pass
