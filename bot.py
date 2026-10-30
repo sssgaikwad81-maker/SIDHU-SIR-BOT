@@ -405,13 +405,24 @@ def extract_single_mcq_block(block: str) -> dict:
                     o = re.sub(r"^[A-Da-d१-४1-4][\.\:\)]\s*", "", o).strip()
                     clean_opts.append(o)
                 if all(len(o) > 0 for o in clean_opts):
+                    q_num_m = re.search(r'(?:Q(?:uestion)?[\.\s]*|प्रश्न\s*|\A\s*)([0-9१-९]+)', block, re.IGNORECASE)
+                    parsed_q_num = None
+                    if q_num_m:
+                        num_str = q_num_m.group(1)
+                        if any(ch in "१२३४५६७८९०" for ch in num_str):
+                            mar_nums = "०१२३४५६७८९"
+                            parsed_q_num = int("".join(str(mar_nums.index(c)) for c in num_str))
+                        else:
+                            parsed_q_num = int(num_str)
+
                     return {
                         "question": q_clean,
                         "options": clean_opts,
                         "correct_option_id": corr_idx if 0 <= corr_idx <= 3 else 0,
                         "explanation": exp,
                         "has_detected_answer": True if ans_m else False,
-                        "has_detected_exp": True if exp_m else False
+                        "has_detected_exp": True if exp_m else False,
+                        "q_num": parsed_q_num
                     }
     return None
 
@@ -638,6 +649,22 @@ def handle_text(msg):
 
     sess = user_sessions.get(msg.chat.id, {})
 
+    # Check if user is typing custom number for instant single MCQ
+    if "waiting_inst_num" in sess:
+        mid = sess.pop("waiting_inst_num")
+        digits = re.findall(r"\d+", topic)
+        if digits:
+            val = int(digits[0])
+            sess["inst_num"] = val
+            bot.reply_to(msg, f"🎯 **प्रश्नाचा नंबर Q{val} निश्चित केला!**")
+            q_item = sess.get("direct_mcq")
+            if q_item:
+                show_single_mcq_instant_menu(msg.chat.id, q_item)
+            return
+        else:
+            bot.reply_to(msg, "कृपया योग्य नंबर टाईप करा (उदा. 11, 21, 51).")
+            return
+
     # Check if user is typing custom start offset
     if "waiting_start_offset" in sess:
         mid = sess.pop("waiting_start_offset")
@@ -852,19 +879,24 @@ def handle_doc(msg):
     except Exception as e:
         bot.edit_message_text(f"❌ फाईल वाचताना त्रुटी: {str(e)}", msg.chat.id, status.message_id)
 
-def show_single_mcq_instant_menu(cid, mcq):
-    """Shows instant 1-click As-Is Quiz Poll menu when user pastes a single manual question."""
+def show_single_mcq_instant_menu(cid, mcq, mid=None):
+    """Shows instant 1-click As-Is Quiz Poll menu with auto-detected question number and 1-click number editing."""
+    sess = user_sessions.get(cid, {})
+    q_num = sess.get("inst_num") or mcq.get("q_num") or 1
+    sess["inst_num"] = q_num
     corr_char = chr(65 + mcq["correct_option_id"])
+
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
         types.InlineKeyboardButton("⚡ जसा आहे तसा थेट पोस्ट करा (Instant Post)", callback_data="inst_post_ch"),
+        types.InlineKeyboardButton(f"🔢 प्रश्नाचा नंबर बदला (चालू: Q{q_num})", callback_data="inst_change_num"),
         types.InlineKeyboardButton("🛠️ प्रश्न / पर्याय एडिट किंवा शफल करा", callback_data="inst_mcq_edit"),
         types.InlineKeyboardButton("❌ रद्द करा", callback_data="can_")
     )
     text = (
-        f"🎯 **हा १ थेट प्रश्न आढळला आहे!**\n"
+        f"🎯 **हा १ थेट प्रश्न आढळला आहे (Q{q_num})!**\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
-        f"📌 *प्रश्न:*\n{mcq['question']}\n\n"
+        f"📌 *प्रश्न (Q{q_num}):*\n{mcq['question']}\n\n"
         f"1️⃣ {mcq['options'][0]}\n"
         f"2️⃣ {mcq['options'][1]}\n"
         f"3️⃣ {mcq['options'][2]}\n"
@@ -874,6 +906,12 @@ def show_single_mcq_instant_menu(cid, mcq):
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"👇 **कोणती कृती करायची आहे? निवडा:**"
     )
+    if mid:
+        try:
+            bot.edit_message_text(text, cid, mid, reply_markup=markup, parse_mode="Markdown")
+            return
+        except Exception:
+            pass
     bot.send_message(cid, text, reply_markup=markup, parse_mode="Markdown")
 
 def show_format_menu(cid, topic_label, mid=None):
@@ -1118,10 +1156,17 @@ def handle_cb(call):
     elif call.data == "inst_post_ch":
         show_instant_channel_menu(cid, mid)
 
+    elif call.data == "inst_change_num":
+        sess["waiting_inst_num"] = mid
+        bot.edit_message_text(
+            f"🔢 **या प्रश्नाचा नंबर कोणता ठेवायचा आहे?**\n*(उदा. 1, 21, 51, 101 टाइप करून पाठवा):*",
+            cid, mid, parse_mode="Markdown"
+        )
+
     elif call.data == "back_to_inst_q":
         q_item = sess.get("direct_mcq")
         if q_item:
-            show_single_mcq_instant_menu(cid, q_item)
+            show_single_mcq_instant_menu(cid, q_item, mid)
         else:
             bot.edit_message_text("🔄 कृपया प्रश्न पुन्हा पाठवा.", cid, mid)
 
@@ -1146,9 +1191,12 @@ def handle_cb(call):
             if not exp_txt:
                 exp_txt = "Correct answer as per standard reference notes." if is_eng_ch else "संदर्भ नोट्सनुसार अचूक उत्तर."
 
+            curr_num = sess.get("inst_num") or q_item.get("q_num") or 1
+            num_prefix = f"Q{curr_num}. "
+
             if is_multi_statement_card(q_item):
                 formatted_q = format_statements_cleanly(raw_q)
-                q_badge = "Question" if is_eng_ch else "प्रश्न"
+                q_badge = f"Question {curr_num}" if is_eng_ch else f"प्रश्न {curr_num}"
                 f_guide = "Select the correct option in the poll below:" if is_eng_ch else "खालील पोलमध्ये अचूक पर्याय निवडा:"
                 card_text = (
                     f"📋 **[{q_badge}]**\n"
@@ -1159,9 +1207,9 @@ def handle_cb(call):
                 )
                 bot.send_message(ch_target, card_text, parse_mode="Markdown")
                 time.sleep(1.2)
-                poll_q = "Select the correct option for the question above:" if is_eng_ch else "वरील प्रश्नाचे अचूक उत्तर निवडा:"
+                poll_q = f"[{q_badge}] {f_guide}"
             else:
-                poll_q = raw_q[:300]
+                poll_q = f"{num_prefix}{raw_q}"[:300]
 
             bot.send_poll(
                 chat_id=ch_target,
@@ -1242,7 +1290,7 @@ def handle_cb(call):
         if sess.get("fmt") == "quiz":
             show_count_menu(cid, mid)
         else:
-            run_content_generation(cid, mid, sess)
+            threading.Thread(target=run_content_generation, args=(cid, mid, sess), daemon=True).start()
 
     elif call.data == "back_to_lang":
         if sess.get("fmt") == "quiz":
@@ -1271,7 +1319,7 @@ def handle_cb(call):
     elif call.data.startswith("tmr_"):
         t_val = call.data.replace("tmr_", "")
         sess["timer"] = 45 if t_val == "45" else None
-        run_content_generation(cid, mid, sess)
+        threading.Thread(target=run_content_generation, args=(cid, mid, sess), daemon=True).start()
 
     elif call.data == "back_to_timer":
         show_count_menu(cid, mid)
@@ -1598,8 +1646,14 @@ def run_content_generation(cid, mid, sess):
                 direct_extracted = parse_all_document_mcqs(topic)
                 if direct_extracted:
                     key_dict = extract_answer_key_dict(topic)
+                    if key_dict:
+                        logging.info(f"Answer Key successfully detected with {len(key_dict)} answers!")
                     for i, q in enumerate(direct_extracted):
-                        if i in key_dict:
+                        q_no = q.get("q_num")
+                        if q_no is not None and (q_no - 1) in key_dict:
+                            q["correct_option_id"] = key_dict[q_no - 1]
+                            q["has_detected_answer"] = True
+                        elif i in key_dict:
                             q["correct_option_id"] = key_dict[i]
                             q["has_detected_answer"] = True
 
@@ -1629,11 +1683,14 @@ def run_content_generation(cid, mid, sess):
                                     for idx, it in enumerate(batch_items)
                                 ]
                                 solve_prompt = (
-                                    f"You are a senior exam paper evaluator for {ch_info['sub']}.\n"
-                                    f"For each MCQ below, determine the strictly correct option index (0 for first option, 1 for second, 2 for third, 3 for fourth) and provide a concise 1-sentence factual explanation in {lang_str}.\n"
+                                    f"You are an expert exam paper evaluator for {ch_info['sub']}.\n"
+                                    f"Solve each MCQ below with 100% precision. Evaluate all 4 options independently and determine which option letter (A, B, C, or D) is factually correct.\n"
                                     f"Input MCQs:\n{json.dumps(solve_payload)}\n\n"
-                                    f"Output strictly a JSON object with key 'answers':\n"
-                                    f"{{\n  \"answers\": [\n    {{\"id\": 0, \"correct_option_id\": 1, \"explanation\": \"...\"}}\n  ]\n}}"
+                                    f"CRITICAL RULES:\n"
+                                    f"1. Choose the genuine correct option letter: 'A', 'B', 'C', or 'D' based on factual examination truth. Do NOT choose the same option for all questions!\n"
+                                    f"2. Provide a 1-sentence factual explanation in {lang_str}.\n"
+                                    f"Output strictly a JSON object:\n"
+                                    f"{{\n  \"answers\": [\n    {{\"id\": 0, \"correct_letter\": \"C\", \"explanation\": \"Factual explanation here.\"}}\n  ]\n}}"
                                 )
                                 solve_res = ask_groq(solve_prompt, json_mode=True)
                                 solve_data = parse_solve_json(solve_res)
@@ -1641,7 +1698,13 @@ def run_content_generation(cid, mid, sess):
                                     s_id = s_item.get("id")
                                     if s_id is not None and 0 <= s_id < len(batch_items):
                                         target_q = batch_items[s_id]
-                                        c_id = s_item.get("correct_option_id", 0)
+                                        let = str(s_item.get("correct_letter") or s_item.get("correct_option") or "").strip().upper()
+                                        if let in "ABCD":
+                                            c_id = ord(let) - ord("A")
+                                        elif "correct_option_id" in s_item:
+                                            c_id = int(s_item["correct_option_id"])
+                                        else:
+                                            c_id = 0
                                         target_q["correct_option_id"] = c_id if 0 <= c_id <= 3 else 0
                                         target_q["has_detected_answer"] = True
                                         s_exp = s_item.get("explanation", "").strip()
