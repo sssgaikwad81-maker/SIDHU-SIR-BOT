@@ -1259,9 +1259,28 @@ def publish_in_background(post_id, cid, mid, item):
                     f"२. बॉटला **'Post Messages'** ची परवानगी दिली आहे का?"
                 )
         else:
-            content = item["data"] + "\n\n━━━━━━━━━━━━━━━\n📢 **अधिक तयारीसाठी जॉईन करा:** @sidhu_sir_official"
+            notes_raw = item["data"]
+            html_text = format_notes_for_telegram(notes_raw)
+            footer = "\n\n━━━━━━━━━━━━━━━\n📢 <b>अधिक तयारीसाठी जॉईन करा:</b> @sidhusirofficial"
+            full_msg = html_text + footer
+
+            chunks = []
+            while len(full_msg) > 3800:
+                s_idx = full_msg.rfind("\n\n", 0, 3800)
+                if s_idx == -1:
+                    s_idx = 3800
+                chunks.append(full_msg[:s_idx].strip())
+                full_msg = full_msg[s_idx:].strip()
+            if full_msg:
+                chunks.append(full_msg)
+
             try:
-                bot.send_message(target_id, content, parse_mode="Markdown")
+                for c in chunks:
+                    try:
+                        bot.send_message(target_id, c, parse_mode="HTML")
+                    except Exception:
+                        bot.send_message(target_id, c)
+                    time.sleep(1)
                 bot.send_message(cid, f"🎉 **अभिनंदन!** मजकूर `{target_id}` चॅनेलवर यशस्वीरीत्या पोस्ट झाला आहे!")
             except Exception as e:
                 bot.send_message(
@@ -2086,6 +2105,14 @@ def render_preview_message(cid, mid, post_id, sess):
         markup.add(types.InlineKeyboardButton("🔙 मागे जा (Back / बदल करा)", callback_data="back_to_timer"))
     else:
         markup.add(types.InlineKeyboardButton("🔙 मागे जा (Back / बदल करा)", callback_data="back_to_lang"))
+        # Add 1-click WhatsApp Share button for notes
+        try:
+            import urllib.parse
+            wa_text = item["data"] + "\n\n📢 Join Telegram: @sidhusirofficial"
+            wa_url = "https://api.whatsapp.com/send?text=" + urllib.parse.quote_plus(wa_text)
+            markup.add(types.InlineKeyboardButton("📲 WhatsApp वर शेअर करा (Share to WhatsApp)", url=wa_url))
+        except Exception:
+            pass
     markup.add(types.InlineKeyboardButton("❌ रद्द करा (Cancel)", callback_data="can_"))
 
     p_mode = "HTML" if fmt in ["notes", "mnemonic"] else "Markdown"
