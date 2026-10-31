@@ -95,7 +95,8 @@ CHANNELS = {
     "upsc_sci": {"title": "🔬 Science & Tech (UPSC)", "id": "@science_quiz_mcq", "sub": "Science, Space & Tech", "lang": "English", "lvl": "upsc"},
     "mpsc_official": {"title": "🚩 Sidhu Sir Official (MPSC)", "id": "@sidhu_sir_official", "sub": "MPSC GS All Subjects", "lang": "Bilingual", "lvl": "combine"},
     "vachal_tar_vachal": {"title": "📖 वाचाल तर वाचाल", "id": "@Vachal_Tar_Vachal", "sub": "प्रबोधन व वाचन चळवळ", "lang": "Marathi", "lvl": "combine"},
-    "ebooks_lab": {"title": "📚 eBooks Lab", "id": "@eBooks_Lab", "sub": "ई-पुस्तके व अभ्यास साहित्य", "lang": "Marathi", "lvl": "combine"}
+    "ebooks_lab": {"title": "📚 eBooks Lab", "id": "@eBooks_Lab", "sub": "ई-पुस्तके व अभ्यास साहित्य", "lang": "Marathi", "lvl": "combine"},
+    "test_channel": {"title": "🧪 चाचणी चॅनेल (Test)", "id": -1003991106121, "sub": "Testing Sandbox", "lang": "Bilingual", "lvl": "combine"}
 }
 
 logging.basicConfig(level=logging.INFO)
@@ -114,9 +115,10 @@ KNOWN_TEXT_MODELS = [
 ]
 
 KNOWN_VISION_MODELS = [
+    "qwen/qwen3.8-27b",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
     "llama-3.2-11b-vision-preview",
-    "llama-3.2-90b-vision-preview",
-    "meta-llama/llama-4-scout-17b-16e-instruct"
+    "llama-3.2-90b-vision-preview"
 ]
 
 def get_available_groq_models():
@@ -154,16 +156,19 @@ def get_text_candidates():
 def get_vision_candidates():
     available = get_available_groq_models()
     candidates = []
+    # 1. Priority flagship multimodal vision model on Groq
+    if not available or "qwen/qwen3.8-27b" in available:
+        candidates.append("qwen/qwen3.8-27b")
     for m in KNOWN_VISION_MODELS:
-        if m in available:
+        if m in available and m not in candidates:
             candidates.append(m)
     for m in available:
         m_low = m.lower()
-        if ("vision" in m_low or "scout" in m_low) and not any(b in m_low for b in ["guard", "whisper", "qwen"]):
+        if ("vision" in m_low or "scout" in m_low or "qwen" in m_low) and not any(b in m_low for b in ["guard", "whisper"]):
             if m not in candidates:
                 candidates.append(m)
     if not candidates:
-        candidates = ["llama-3.2-11b-vision-preview", "llama-3.2-90b-vision-preview", "meta-llama/llama-4-scout-17b-16e-instruct"]
+        candidates = ["qwen/qwen3.8-27b", "meta-llama/llama-4-scout-17b-16e-instruct"]
     return candidates
 
 def get_vision_model():
@@ -436,7 +441,7 @@ def standardize_mcq_for_exam(q: dict, lvl: str) -> dict:
 
 def extract_single_mcq_block(block: str) -> dict:
     """Robustly extracts an MCQ ensuring statements 1, 2, 3 and chronological sequences are NEVER confused with options."""
-    ans_m = re.search(r"(?:\n\s*|\A)(?:[✅\*\s]*)?(?:उत्तर|Ans(?:wer)?|Correct|अचूक\s*उत्तर|योग्य\s*पर्याय|पर्याय)\s*[:\-]?\s*(?:पर्याय\s*)?[\(\[]?\s*([A-Da-d१-४1-4])\s*[\)\]]?", block, re.IGNORECASE)
+    ans_m = re.search(r"(?:\n\s*|\A)(?:[✅\*\s]*)?(?:Correct\s*Answer|Answer|Ans(?:wer)?|Correct|उत्तर|अचूक\s*उत्तर|योग्य\s*पर्याय|पर्याय)\s*[:\-]?\s*(?:पर्याय\s*)?[\(\[]?\s*([A-Da-d1-4१-४])\s*[\)\]]?", block, re.IGNORECASE)
     corr_idx = 0
     if ans_m:
         ch = ans_m.group(1)
@@ -493,7 +498,7 @@ def extract_single_mcq_block(block: str) -> dict:
             q_part = m.group(1).strip()
             # Strip Q 1 | UPSC 1984 or Question 1: headers cleanly
             q_clean = re.sub(r"^\s*(?:Q(?:uestion)?[\.\s]*\d+[\s\.:\)\|\-\–]*|प्रश्न\s*[\d१-९]+[\s\.:\)\|\-\–]*|\d+[\.:\)]\s*)", "", q_part, flags=re.IGNORECASE).strip()
-            q_clean = re.sub(r"^(?:(?:UPSC|MPSC|Combine|Prelims|Mains|CSAT)?\s*[\d\–\-\|\s]+\n*)+", "", q_clean, flags=re.IGNORECASE).strip()
+            q_clean = re.sub(r"^\s*(?:[\(\[]\s*(?:UPSC|MPSC|Combine|Prelims|Mains|CSAT|IAS|IPS|NDA|CDS|State\s*Services?|राज्यसेवा)?[^\)\]\n]*?(?:19|20)\d\d[^\)\]\n]*?[\)\]]|(?:(?:UPSC|MPSC|Combine|Prelims|Mains|CSAT|IAS|State\s*Services?|राज्यसेवा)?\s*[\d\–\-\|\s]+)+)\s*", "", q_clean, flags=re.IGNORECASE).strip()
             if len(q_clean) > 5:
                 raw_opts = [m.group(i).strip()[:90] for i in range(2, 6)]
                 # Clean nested option tags if any
@@ -503,7 +508,7 @@ def extract_single_mcq_block(block: str) -> dict:
                     o = re.sub(r"^[A-Da-d१-४1-4][\.\:\)]\s*", "", o).strip()
                     clean_opts.append(o)
                 if all(len(o) > 0 for o in clean_opts):
-                    q_num_m = re.search(r'(?:Q(?:uestion)?[\.\s]*|प्रश्न\s*|\A\s*)([0-9१-९]+)', block, re.IGNORECASE)
+                    q_num_m = re.search(r'^\s*(?:Q(?:uestion)?[\.\s]*|प्रश्न\s*|\A\s*)([0-9१-९]+)\b', block, re.IGNORECASE)
                     parsed_q_num = None
                     if q_num_m:
                         num_str = q_num_m.group(1)
@@ -537,7 +542,7 @@ def extract_single_mcq_block(block: str) -> dict:
                 o = re.sub(r"^[A-Da-d१-४1-4][\.\:\)]\s*", "", o).strip()
                 clean_opts.append(o)
 
-            q_num_m = re.search(r'(?:Q(?:uestion)?[\.\s]*|प्रश्न\s*|\A\s*)([0-9१-९]+)', block, re.IGNORECASE)
+            q_num_m = re.search(r'^\s*(?:Q(?:uestion)?[\.\s]*|प्रश्न\s*|\A\s*)([0-9१-९]+)\b', block, re.IGNORECASE)
             parsed_q_num = None
             if q_num_m:
                 num_str = q_num_m.group(1)
@@ -565,15 +570,19 @@ def split_document_into_question_blocks(text: str) -> list:
     if not text:
         return []
 
+    # Strip Answer Key & Detailed Explanations from the end so they are never split as fake questions!
+    cut_key = re.search(r"(?:\n\s*|\A)(?:ANSWER\s*KEYS?|उत्तरपत्रिका|उत्तरांची\s*सूची|ANSWERS?|KEYS?|उत्तरसूची|अचूक\s*उत्तरे|उत्तरतालिका)\b", text, re.IGNORECASE)
+    body_text = text[:cut_key.start()].strip() if cut_key else text
+
     # Strategy 1: Universal Question marker (supports Q 1 | UPSC 1984, Q 1 |, Q1:, Q1., Question 1, प्रश्न 1, etc.)
-    q_pat = r"(?:\n\s*|\A)(?:Q(?:uestion)?[\.\s]*\d+[\s\.:\)\|\-\–]+|प्रश्न\s*[\d१-९]+[\s\.:\)\|\-\–]+)"
-    parts = list(re.finditer(q_pat, text, flags=re.IGNORECASE))
+    q_pat = r"(?:\n\s*|\A)(?:Q(?:uestion)?[\.\s]*\d+[\s\.:\)\|\-\–\(\[]+|प्रश्न\s*[\d१-९]+[\s\.:\)\|\-\–\(\[]+|\d+[\.:\)]\s*(?:[\(\[][^\)\n\]]*(?:19|20)\d\d[^\)\n\]]*[\)\]]|(?:UPSC|MPSC|Combine|CSE)\b))"
+    parts = list(re.finditer(q_pat, body_text, flags=re.IGNORECASE))
     if len(parts) >= 2:
         blocks = []
         for i in range(len(parts)):
             start = parts[i].start()
-            end = parts[i+1].start() if i + 1 < len(parts) else len(text)
-            b = text[start:end].strip()
+            end = parts[i+1].start() if i + 1 < len(parts) else len(body_text)
+            b = body_text[start:end].strip()
             if b:
                 blocks.append(b)
         if len(blocks) >= 2:
@@ -638,8 +647,13 @@ def extract_answer_key_dict(text: str) -> dict:
 
     search_text = m.group(1)
 
+    # Cut off at DETAILED EXPLANATIONS so lines like 'Q. 01. Answer: [B]' do not corrupt the answer key!
+    cut_exp = re.search(r"(?:\n\s*|\A)(?:DETAILED\s*EXPLANATIONS?|EXPLANATIONS?|स्पष्टीकरणे?|विस्तृत\s*स्पष्टीकरण)\b", search_text, re.IGNORECASE)
+    if cut_exp:
+        search_text = search_text[:cut_exp.start()].strip()
+
     # Format A: 3-column table format (Q \n Year \n Ans, e.g. 1 \n 1984 \n A)
-    tbl_pairs = re.findall(r"([0-9१-९]+)[\s\n\t\|]+(?:(?:19|20)\d\d[\s\n\t\|]+)?([A-Da-d1-4१-४])\b", search_text)
+    tbl_pairs = re.findall(r"(?:Q(?:uestion)?[\.\s]*\s*)?([0-9१-९]+)[\s\n\t\|]+(?:[^\n\|]*?(?:19|20)\d\d[^\n\|]*?[\s\n\t\|]+)?([A-Da-d1-4१-४])\b", search_text)
     for q_str, ans_str in tbl_pairs:
         try:
             q_num = int(q_str)
@@ -657,8 +671,8 @@ def extract_answer_key_dict(text: str) -> dict:
     if key_dict:
         return key_dict
 
-    # Format B: Standard inline pairs (1. A, 1-b, 1: C, Q1 D, १-२)
-    pat = r"(?:Q(?:uestion)?\s*)?([0-9१-९]+)[\s\.:\|\-\–\t]+[\(\[]?\s*([A-Da-d1-4१-४अ-ड])\s*[\)\]]?"
+    # Format B: Standard inline pairs (Q. 01 - B, 1. A, 1-b, 1: C, Q1 D, १-२)
+    pat = r"(?:Q(?:uestion)?[\.\s]*\s*)?([0-9१-९]+)[\s\.:\|\-\–\t]+(?:[^\n\|\-\–]*?(?:19|20)\d\d[^\n\|\-\–]*?[\s\.:\|\-\–\t]+)?[\(\[]?\s*([A-Da-d1-4१-४अ-ड])\s*[\)\]]?"
     pairs = re.findall(pat, search_text)
 
     for q_str, ans_str in pairs:
@@ -687,6 +701,29 @@ def extract_answer_key_dict(text: str) -> dict:
             pass
 
     return key_dict
+
+
+def extract_explanations_dict(text: str) -> dict:
+    """Extracts detailed explanations from DETAILED EXPLANATIONS section for each question."""
+    exp_dict = {}
+    exp_pat = r"(?:DETAILED\s*EXPLANATIONS?|EXPLANATIONS?|विस्तृत\s*स्पष्टीकरणे?|स्पष्टीकरणे?)"
+    m = re.search(r"(?:\n\s*|\A)" + exp_pat + r"\s*[:\-]?\s*(.+)", text, re.IGNORECASE | re.DOTALL)
+    if not m:
+        return {}
+    exp_text = m.group(1)
+    blocks = re.split(r"(?:\n\s*|\A)(?:Q(?:uestion)?[\.\s]*\d+[\s\.:\)\|\-\–]+)", exp_text, flags=re.IGNORECASE)
+    q_nums = re.findall(r"(?:Q(?:uestion)?[\.\s]*(\d+)[\s\.:\)\|\-\–]+)", exp_text, flags=re.IGNORECASE)
+    for q_n_str, blk in zip(q_nums, blocks[1:]):
+        try:
+            q_idx = int(q_n_str) - 1
+            clean_b = re.sub(r"^\s*Answer\s*[:\-]?[\s\[\(]*[A-D][\]\)]?\s*(?:\([^\)]*\))?\s*", "", blk, flags=re.IGNORECASE).strip()
+            clean_b = re.sub(r"^[\-\–\s]+", "", clean_b).strip()
+            if clean_b:
+                clean_one_line = re.sub(r"\s+", " ", clean_b)
+                exp_dict[q_idx] = clean_one_line[:180]
+        except Exception:
+            pass
+    return exp_dict
 
 def parse_plain_text_mcqs(text: str) -> list:
     return parse_all_document_mcqs(text)
@@ -961,6 +998,20 @@ def handle_photo(msg):
             sess["last_photo_time"] = now_t
             label = "📸 वृत्तपत्राचे कात्रण (Newspaper Scan)"
 
+        # Check if the photo contains a single direct MCQ from a book!
+        detected_single = extract_single_mcq_block(extracted_text)
+        if detected_single:
+            user_sessions[cid] = {
+                "topic": extracted_text,
+                "source_type": "photo_mcq",
+                "direct_mcq": detected_single,
+                "parsed_mcqs": [detected_single],
+                "total_mcqs": 1,
+                "start_num": 1
+            }
+            show_single_mcq_instant_menu(cid, detected_single)
+            return
+
         user_sessions[cid] = sess
         show_format_menu(cid, label)
     except Exception as e:
@@ -1014,7 +1065,7 @@ def extract_text_from_photo(img_bytes: bytes) -> str:
                 "content-type": "application/json"
             }
             c_payload = {
-                "model": "claude-3-5-haiku-20241022",
+                "model": "claude-3-5-sonnet-20241022",
                 "max_tokens": 2000,
                 "messages": [{
                     "role": "user",
@@ -1134,6 +1185,17 @@ def handle_doc(msg):
         if has_mcq_markers:
             # File is a genuine Question Bank -> Parse MCQs cleanly
             parsed_doc_mcqs = parse_all_document_mcqs(extracted)
+            key_dict = extract_answer_key_dict(extracted)
+            exp_dict = extract_explanations_dict(extracted)
+            for i, q in enumerate(parsed_doc_mcqs):
+                q_no = q.get("q_num")
+                k_idx = (q_no - 1) if (q_no is not None and (q_no - 1) in key_dict) else i
+                if k_idx in key_dict:
+                    q["correct_option_id"] = key_dict[k_idx]
+                    q["has_detected_answer"] = True
+                if k_idx in exp_dict:
+                    q["explanation"] = exp_dict[k_idx]
+                    q["has_detected_exp"] = True
             doc_count = len(parsed_doc_mcqs)
             user_sessions[msg.chat.id] = {
                 "topic": extracted[:300000],
@@ -1851,6 +1913,9 @@ def show_instant_channel_menu(cid, mid):
         types.InlineKeyboardButton(CHANNELS["vachal_tar_vachal"]["title"], callback_data="instpub_vachal_tar_vachal"),
         types.InlineKeyboardButton(CHANNELS["ebooks_lab"]["title"], callback_data="instpub_ebooks_lab")
     )
+    markup.add(
+        types.InlineKeyboardButton(CHANNELS["test_channel"]["title"], callback_data="instpub_test_channel")
+    )
     markup.add(types.InlineKeyboardButton("🔙 मागे जा (Back)", callback_data="back_to_inst_q"))
     text = "👇 **कोणत्या चॅनेलवर पोस्ट करायचे आहे?**\n*(चॅनेल निवडताच १ सेकंदात थेट पोल जाईल!)*"
     if mid:
@@ -1878,6 +1943,9 @@ def show_channel_menu(cid, mid):
     markup.add(
         types.InlineKeyboardButton(CHANNELS["vachal_tar_vachal"]["title"], callback_data="ch_vachal_tar_vachal"),
         types.InlineKeyboardButton(CHANNELS["ebooks_lab"]["title"], callback_data="ch_ebooks_lab")
+    )
+    markup.add(
+        types.InlineKeyboardButton(CHANNELS["test_channel"]["title"], callback_data="ch_test_channel")
     )
     markup.add(types.InlineKeyboardButton("🔙 मागे जा (Back)", callback_data="back_to_ch"))
     bot.edit_message_text("👇 **कोणत्या चॅनेलवर पोस्ट करायचे आहे?**", cid, mid, reply_markup=markup, parse_mode="Markdown")
@@ -1973,16 +2041,18 @@ def run_content_generation(cid, mid, sess):
                 direct_extracted = parse_all_document_mcqs(topic)
                 if direct_extracted:
                     key_dict = extract_answer_key_dict(topic)
+                    exp_dict = extract_explanations_dict(topic)
                     if key_dict:
                         logging.info(f"Answer Key successfully detected with {len(key_dict)} answers!")
                     for i, q in enumerate(direct_extracted):
                         q_no = q.get("q_num")
-                        if q_no is not None and (q_no - 1) in key_dict:
-                            q["correct_option_id"] = key_dict[q_no - 1]
+                        k_idx = (q_no - 1) if (q_no is not None and (q_no - 1) in key_dict) else i
+                        if k_idx in key_dict:
+                            q["correct_option_id"] = key_dict[k_idx]
                             q["has_detected_answer"] = True
-                        elif i in key_dict:
-                            q["correct_option_id"] = key_dict[i]
-                            q["has_detected_answer"] = True
+                        if k_idx in exp_dict:
+                            q["explanation"] = exp_dict[k_idx]
+                            q["has_detected_exp"] = True
 
                     # Set language-aware default explanation
                     def_exp = "Correct answer as per standard reference notes." if lang == "english" else "संदर्भ नोट्सनुसार अचूक उत्तर."
