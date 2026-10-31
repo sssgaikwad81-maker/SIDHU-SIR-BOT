@@ -1028,9 +1028,9 @@ def extract_text_from_photo(img_bytes: bytes) -> str:
         image = Image.open(io.BytesIO(img_bytes))
         if image.mode != "RGB":
             image = image.convert("RGB")
-        image.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+        image.thumbnail((720, 720), Image.Resampling.LANCZOS)
         out_buf = io.BytesIO()
-        image.save(out_buf, format="JPEG", quality=80, optimize=True)
+        image.save(out_buf, format="JPEG", quality=65, optimize=True)
         img_payload = out_buf.getvalue()
     except Exception:
         img_payload = img_bytes
@@ -1112,7 +1112,7 @@ def extract_text_from_photo(img_bytes: bytes) -> str:
                 ]
             }],
             "temperature": 0.1,
-            "max_tokens": 2000
+            "max_tokens": 1000
         }
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=40)
@@ -1366,6 +1366,48 @@ def show_answer_select_menu(cid, mid, post_id, q_idx):
 # ------------------------------------------------------------------------------
 # 5. STEP-BY-STEP FLOW WITH ASYNC BACKGROUND PUBLISHING & SMART TWO-PART CARDS
 # ------------------------------------------------------------------------------
+def safe_send_message_with_retry(bot_instance, chat_id, text, parse_mode=None, max_retries=5):
+    """Safely sends a message with automatic Telegram 429 rate limit backoff."""
+    for attempt in range(max_retries):
+        try:
+            return bot_instance.send_message(chat_id, text, parse_mode=parse_mode)
+        except telebot.apihelper.ApiTelegramException as e:
+            if getattr(e, 'error_code', None) == 429:
+                wait_t = getattr(e, 'retry_after', 14) or 14
+                time.sleep(wait_t + 2)
+            else:
+                if parse_mode:
+                    try:
+                        return bot_instance.send_message(chat_id, text)
+                    except telebot.apihelper.ApiTelegramException as e2:
+                        if getattr(e2, 'error_code', None) == 429:
+                            wait_t = getattr(e2, 'retry_after', 14) or 14
+                            time.sleep(wait_t + 2)
+                            continue
+                if attempt == max_retries - 1:
+                    raise e
+        except Exception as e:
+            time.sleep(2)
+            if attempt == max_retries - 1:
+                raise e
+
+def safe_send_poll_with_retry(bot_instance, poll_kwargs, max_retries=5):
+    """Safely sends a poll with automatic Telegram 429 rate limit backoff."""
+    for attempt in range(max_retries):
+        try:
+            return bot_instance.send_poll(**poll_kwargs)
+        except telebot.apihelper.ApiTelegramException as e:
+            if getattr(e, 'error_code', None) == 429:
+                wait_t = getattr(e, 'retry_after', 14) or 14
+                time.sleep(wait_t + 2)
+            else:
+                if attempt == max_retries - 1:
+                    raise e
+        except Exception as e:
+            time.sleep(2)
+            if attempt == max_retries - 1:
+                raise e
+
 def publish_in_background(post_id, cid, mid, item):
     """Executes posting with Two-Part Cards ONLY for genuine multi-statement questions, and native polls for direct ones."""
     target_id = item["channel_id"]
@@ -1409,11 +1451,8 @@ def publish_in_background(post_id, cid, mid, item):
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"👇 **{f_guide}**"
                     )
-                    try:
-                        bot.send_message(target_id, card_text, parse_mode="Markdown")
-                    except Exception:
-                        bot.send_message(target_id, card_text)
-                    time.sleep(1.2)
+                    safe_send_message_with_retry(bot, target_id, card_text, parse_mode="Markdown")
+                    time.sleep(2.0)
 
                     poll_q = f"[{curr_num}/{total_display}] Select the correct option for the question above:" if is_eng_ch else f"[{curr_num}/{total_display}] वरील प्रश्नाचे अचूक उत्तर निवडा:"
                 else:
@@ -1431,26 +1470,13 @@ def publish_in_background(post_id, cid, mid, item):
                 if timer_sec:
                     poll_kwargs["open_period"] = timer_sec
 
-                success = False
-                for attempt in range(3):
-                    try:
-                        bot.send_poll(**poll_kwargs)
-                        posted_count += 1
-                        success = True
+                try:
+                    safe_send_poll_with_retry(bot, poll_kwargs, max_retries=6)
+                    posted_count += 1
+                except Exception as pe:
+                    last_err = str(pe)
+                    if posted_count == 0:
                         break
-                    except telebot.apihelper.ApiTelegramException as e:
-                        last_err = str(e)
-                        if getattr(e, 'error_code', None) == 429:
-                            wait_t = getattr(e, 'retry_after', 10) or 10
-                            time.sleep(wait_t + 1)
-                        else:
-                            break
-                    except Exception as e:
-                        last_err = str(e)
-                        break
-
-                if not success and posted_count == 0:
-                    break
 
                 if posted_count > 0 and posted_count % 10 == 0 and posted_count < total_q:
                     try:
@@ -1458,7 +1484,7 @@ def publish_in_background(post_id, cid, mid, item):
                     except Exception:
                         pass
 
-                time.sleep(2.5)
+                time.sleep(3.2)
 
             if posted_count == total_q:
                 bot.send_message(cid, f"🎉 **अभिनंदन!** सर्व {posted_count} प्रश्न `{target_id}` चॅनेलवर यशस्वीरीत्या पोस्ट झाले आहेत!")
@@ -2157,38 +2183,30 @@ def run_content_generation(cid, mid, sess):
                             f"3. Extract the exact question text, the 4 choices, correct answer (0-3), and explanation.\n"
                         )
                     else:
-                        if lvl == "upsc":
+                        is_pure_eng = (lang == "english") or (ch_info.get("lang") == "English")
+                        if lvl == "upsc" or is_pure_eng:
                             pattern_instruction = (
-                                "EXAM LEVEL: UPSC Civil Services Examination (CSE) Prelims Standard.\n"
-                                "QUESTION FORMAT & VARIETY (MANDATORY UPSC CSE GUIDELINES):\n"
-                                "1. STRICT DIVERSITY OF CORRECT ANSWERS (RANDOMIZE!):\n"
-                                "   - The correct answers MUST BE EVENLY DISTRIBUTED across (a), (b), (c), and (d) (indices 0, 1, 2, 3)!\n"
-                                "   - NEVER make every question '(c) Both 1 and 2' or index 2! Distribute answers evenly across A, B, C, D.\n"
-                                "2. REALISTIC EXAM TRAPS & FALSE STATEMENTS:\n"
-                                "   - In real UPSC Prelims, at least 40% to 50% of statements are FALSE or contain subtle exam traps (e.g. swapped organs/bones/functions, wrong articles, reversed causes, incorrect years, exaggerated absolutes like 'solely' or 'always').\n"
-                                "   - Introduce false statements so that (a) 1 only, (b) 2 only, or (d) Neither 1 nor 2 are frequently correct!\n"
-                                "3. MIX MULTIPLE QUESTION FORMATS ACROSS THE BATCH:\n"
-                                "   - Format A: 2 or 3 Statements ('Consider the following statements... Which of the statements given above is/are correct?').\n"
-                                "   - Format B: Inverted Questions ('Which of the statements given above is/are NOT correct?').\n"
-                                "   - Format C: Pairs Matching ('Consider the following pairs... How many pairs are correctly matched? (a) Only one pair, (b) Only two pairs, (c) All three pairs, (d) None').\n"
-                                "   - Format D: Chronological Order / Sequence ('Arrange in correct order...').\n"
-                                "   - Format E: Direct 1-liner factual MCQs for discoveries, scientific laws, or terms.\n"
-                                "   - Statements in the question text MUST be numbered: 1., 2., 3. with newlines.\n"
-                                "   - Options MUST be lettered in English: (a) ..., (b) ..., (c) ..., (d) ...\n"
+                                f"EXAM LEVEL: {'UPSC Civil Services' if lvl == 'upsc' else 'MPSC (English Medium)'} Standard.\n"
+                                "STRICT PURE ENGLISH FORMAT (CRITICAL):\n"
+                                "1. 100% PURE ENGLISH: Every question, statement, option, and explanation MUST be strictly in English! NEVER use Marathi letters (अ, ब, क, ड) or Marathi digits (१, २, ३, ४)!\n"
+                                "2. STATEMENT LABELS: In multi-statement questions, statements MUST be numbered with English numbers: 1., 2., 3., 4. (e.g. '1. Statement one\n2. Statement two').\n"
+                                "3. OPTION FORMAT: Options MUST be lettered in English: (a) 1 and 2 only, (b) 2 and 4 only, (c) 1, 2 and 3 only, (d) 1, 3 and 4 only (or direct English text for 1-liner options).\n"
+                                "4. DIVERSITY: Distribute correct answers evenly across (a), (b), (c), and (d). NEVER make all answers 'C'!\n"
+                                "5. EXAM TRAPS: Include subtle factual traps so (a) 1 only, (b) 2 only, or (d) Neither are frequently correct.\n"
                             )
                         elif lvl == "rajyaseva":
                             pattern_instruction = (
                                 "EXAM LEVEL: MPSC राज्यसेवा (Civil Services) पूर्व परीक्षा Standard.\n"
                                 "QUESTION FORMAT & VARIETY (MANDATORY MPSC RAJYASEVA GUIDELINES):\n"
                                 "1. उत्तरांची विविधता (STRICT DIVERSITY & RANDOMIZATION):\n"
-                                "   - प्रत्येक प्रश्नाचे अचूक उत्तर फक्त एकच (उदा. नेहमी ३ किंवा ४) नसावे! अचूक उत्तरे १), २), ३), ४) (indices 0, 1, 2, 3) मध्ये समान विभागलेली असावीत.\n"
+                                "   - प्रत्येक प्रश्नाचे अचूक उत्तर फक्त एकच नसावे! अचूक उत्तरे १), २), ३), ४) (indices 0, 1, 2, 3) मध्ये समान विभागलेली असावीत.\n"
                                 "2. परीक्षा-स्तरीय ट्रॅप्स आणि अयोग्य विधाने (EXAM TRAPS):\n"
                                 "   - एमपीएससीच्या ४०% ते ५०% विधानांमध्ये सूक्ष्म चुका, चुकीची कलमे, बदललेल्या तारखा किंवा फॅक्ट्स असतात, जेणेकरून 'फक्त अ', 'फक्त ब', किंवा 'एकही नाही' हे पर्याय अचूक ठरतील.\n"
                                 "3. विविध प्रकारच्या प्रश्नांचे मिश्रण (MIX FORMATS):\n"
                                 "   - प्रकार १: बहुविधानात्मक ('खालील विधाने विचारात घ्या... योग्य विधान/ने निवडा').\n"
                                 "   - प्रकार २: अयोग्य विधान ओळखा ('खालीलपैकी कोणते विधान चुकीचे/अयोग्य आहे?').\n"
                                 "   - प्रकार ३: जोड्या लावा / कालानुक्रम ('योग्य कालानुक्रम लावा...').\n"
-                                "   - प्रकार ४: थेट फॅक्ट्युअल प्रश्न (पुरस्कार, खेळ, पुस्तके, दिनविशेष यासाठी विधाने न लावता थेट प्रश्न व ४ पर्याय).\n"
+                                "   - प्रकार ४: थेट फॅक्ट्युअल प्रश्न.\n"
                                 "   - विधाने MUST be lettered in Marathi: (अ), (ब), (क), (ड) with newlines.\n"
                                 "   - खालील ४ पर्याय MUST be numbered in Marathi digits: १) ..., २) ..., ३) ..., ४) ...\n"
                             )
@@ -2289,14 +2307,17 @@ def run_content_generation(cid, mid, sess):
                     "Format each news event as a unified, beautiful shaded Telegram Blockquote Card using this syntax:\n"
                     "emoji **[ठळक आकर्षक शीर्षक]**\n"
                     ">■ **[विशिष्ट घटक]** - [तपशील]\n\n"
-                    "CRITICAL ATTRIBUTE LABELING RULE (STRICT):\n"
-                    "1. DO NOT USE SLASH-SEPARATED TEMPLATES! Never write 'अध्यक्ष / व्यक्ती / मंत्रालय' or 'उद्देश / वैशिष्ट्ये'!\n"
-                    "2. Choose ONLY ONE natural, single, relevant Marathi word per line that fits the fact:\n"
-                    "   - If sports/event: use '■ **खेळाडू** - ...', '■ **बोली / रक्कम** - ...', '■ **संघ** - ...', '■ **स्थान** - ...'\n"
-                    "   - If government scheme: use '■ **मंत्रालय** - ...', '■ **सुरुवात** - ...', '■ **उद्देश** - ...'\n"
-                    "   - If appointment/meeting: use '■ **अध्यक्ष** - ...', '■ **ठिकाण** - ...', '■ **सहभाग** - ...'\n"
-                    "   - Other clean single labels: '■ **कालावधी** - ...', '■ **आयोजक** - ...', '■ **विशेष नोंद** - ...'\n"
-                    "3. COHESIVE CARD: Group all related points of the event into ONE unified card (do not split 1 event into 6 tiny repetitive fragments!).\n"
+                    "CRITICAL ATTRIBUTE LABELING & FACTUAL ACCURACY RULES (STRICT):\n"
+                    "1. ZERO HALLUCINATION (अचूक सत्यता):\n"
+                    "   - DO NOT INVENT, GUESS OR FABRICATE FACTS!\n"
+                    "   - Never insert fake or illogical labels (e.g. NEVER put 'आयोजक' or 'कालावधी - ५ वर्षे' for military or constitutional appointments!).\n"
+                    "   - In Indian Armed Forces: Chief tenure is 3 years or age 62, NOT 5 years!\n"
+                    "2. INTELLIGENT CONTEXTUAL LABELS:\n"
+                    "   - If Appointment (नियुक्ती): use '■ **नियुक्त व्यक्ती** - ...', '■ **पद** - ...', '■ **संस्था / दल** - ...', '■ **महत्त्वाचा संदर्भ** - ...'\n"
+                    "   - If Sports/Tournament: use '■ **खेळाडू** - ...', '■ **विजेता** - ...', '■ **उपविजेता** - ...', '■ **स्थान / ठिकाण** - ...'\n"
+                    "   - If Government Scheme / Law: use '■ **मंत्रालय** - ...', '■ **उद्देश** - ...', '■ **लाभार्थी** - ...', '■ **महत्त्वाची तरतूद** - ...'\n"
+                    "   - If Summit / Conference: use '■ **आयोजक** - ...', '■ **अध्यक्ष** - ...', '■ **कालावधी** - ...', '■ **ठिकाण** - ...'\n"
+                    "3. Choose ONLY labels that make logical sense for that specific news. Do not force irrelevant template labels!\n"
                     "4. Every attribute line MUST start with '>■ ' so Telegram renders the shaded card box!\n"
                     "5. End with footer: ✍️ **संकलन :** ©सिधू सर ऑफिशियल | @sidhu_sir_official"
                 )
