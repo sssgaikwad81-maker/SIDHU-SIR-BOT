@@ -75,6 +75,13 @@ threading.Thread(target=keep_render_awake, daemon=True).start()
 # 1. CREDENTIALS & CHANNELS
 # ------------------------------------------------------------------------------
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+ADMIN_IDS = [1186656521, 1150112895]
+
+def is_authorized(user_id: int) -> bool:
+    if not ADMIN_IDS:
+        return True
+    return user_id in ADMIN_IDS
+
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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").strip()
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
@@ -775,6 +782,9 @@ def get_batch_sizes(total_cnt, max_per_batch=15):
 # ------------------------------------------------------------------------------
 @bot.message_handler(commands=['start', 'help'])
 def start_cmd(msg):
+    if not is_authorized(msg.from_user.id):
+        bot.reply_to(msg, "⛔ **प्रवेश नाकारला (Access Denied)**\n\nक्षमस्व! तुम्ही या बॉटचे अधिकृत ॲडमिन नाही. हा सिद्धू सरांचा खाजगी अकॅडमी बॉट आहे.")
+        return
     user_sessions[msg.chat.id] = {}  # Clean reset on /start
     text = (
         "🚀 *Sidhu Sir's Ultimate Quiz & Content Bot Active!*\n\n"
@@ -790,6 +800,8 @@ def start_cmd(msg):
 # 1. Text Input, Custom Count & Advanced Option Edit Handler
 @bot.message_handler(func=lambda m: True, content_types=['text'])
 def handle_text(msg):
+    if not is_authorized(msg.from_user.id):
+        return
     topic = msg.text.strip()
     if not topic or topic.startswith('/'):
         return
@@ -921,6 +933,8 @@ def handle_text(msg):
 # 2. Book Photo Input (Vision AI)
 @bot.message_handler(content_types=['photo'])
 def handle_photo(msg):
+    if not is_authorized(msg.from_user.id):
+        return
     status = bot.reply_to(msg, "📸 *वृत्तपत्राचा फोटो मिळाला!* AI मजकूर वाचत आहे...", parse_mode="Markdown")
     try:
         file_info = bot.get_file(msg.photo[-1].file_id)
@@ -1080,6 +1094,8 @@ def extract_text_from_docx(docx_bytes: bytes) -> str:
 # 4. Document Handler (PDF & Word .docx - Full capacity up to 300,000 characters)
 @bot.message_handler(content_types=['document'])
 def handle_doc(msg):
+    if not is_authorized(msg.from_user.id):
+        return
     fname = msg.document.file_name.lower() if msg.document.file_name else "file"
     is_pdf = fname.endswith('.pdf')
     is_docx = fname.endswith('.docx') or fname.endswith('.doc')
@@ -1434,6 +1450,9 @@ def publish_in_background(post_id, cid, mid, item):
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_cb(call):
+    if not is_authorized(call.from_user.id):
+        bot.answer_callback_query(call.id, "⛔ तुम्हाला या बॉटमध्ये परवानगी नाही.", show_alert=True)
+        return
     cid = call.message.chat.id
     mid = call.message.message_id
     sess = user_sessions.get(cid, {})
