@@ -82,7 +82,7 @@ def is_authorized(user_id: int) -> bool:
         return True
     return user_id in ADMIN_IDS
 
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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").strip()
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
