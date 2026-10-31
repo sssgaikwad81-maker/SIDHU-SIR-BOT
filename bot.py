@@ -74,7 +74,7 @@ threading.Thread(target=keep_render_awake, daemon=True).start()
 # ------------------------------------------------------------------------------
 # 1. CREDENTIALS & CHANNELS
 # ------------------------------------------------------------------------------
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "9253804253:AAE6F5IejNO0tcz8sGydZUqwALVFMEKcULg")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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").strip()
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
